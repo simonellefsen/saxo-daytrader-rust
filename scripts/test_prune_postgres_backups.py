@@ -210,10 +210,10 @@ def record(backup_id: str) -> "prune.BackupRecord":
 class PruneRunTests(unittest.TestCase):
     """The whole retention run, with Kubernetes and the bucket faked.
 
-    Four completed backups on 2026-10-18 12:00Z: checkpoint retention keeps the
-    two newest and the week-old checkpoint (2026-10-10) and prunes the
-    2026-10-01 backup. WAL must be judged against what is kept, so the WAL the
-    pruned backup would have needed goes too.
+    Four completed backups on Sunday 2026-10-18 12:00Z: retention keeps the two
+    newest and the previous week's first, which is also the recovery floor
+    (2026-10-10), and prunes the 2026-10-01 backup. WAL must be judged against
+    what is kept, so the WAL the pruned backup would have needed goes too.
     """
 
     NOW = dt.datetime(2026, 10, 18, 12, 0, tzinfo=dt.timezone.utc)
@@ -265,6 +265,88 @@ class PruneRunTests(unittest.TestCase):
         self.assertEqual(report["wal_pruning"][SERVER]["status"], "off")
         self.assertIn(wal(OLD_TL3), s3.objects)
         self.assertIn(wal(OLD_TL4), s3.objects)
+
+
+def at(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value).replace(tzinfo=dt.timezone.utc)
+
+
+def backup_at(started: dt.datetime) -> "prune.BackupRecord":
+    return record((started + dt.timedelta(seconds=1)).strftime("%Y%m%dT%H%M%S"))
+
+
+def simulate(survivors, start, end, pauses=()):
+    """Runs the two CronJobs as scheduled: a backup at :00 and :30 and
+    retention at :05 and :35, nothing at all during a pause. Returns each
+    retention run as (time, survivors)."""
+    survivors = list(survivors)
+    runs = []
+    now = start
+    while now < end:
+        if not any(a <= now < b for a, b in pauses):
+            if now.minute in (0, 30):
+                survivors.append(backup_at(now))
+            elif now.minute in (5, 35):
+                with mock.patch.object(prune, "_utc_now", return_value=now):
+                    kept = prune._checkpoint_selection(survivors)
+                survivors = [r for r in survivors if r.backup_id in kept]
+                runs.append((now, list(survivors)))
+        now += dt.timedelta(minutes=5)
+    return runs
+
+
+class RetentionPolicyTests(unittest.TestCase):
+    """Retention over weeks of runs, not a single snapshot: the rule it
+    replaced looked right at any one moment and was wrong over time."""
+
+    def assert_window_holds(self, runs, first_backup, slack):
+        """At least seven days of recovery (or all the history there is), and
+        at most fourteen plus `slack`: an outage delays the backup that would
+        have become the next floor, so the old one is held for that long."""
+        for now, survivors in runs:
+            window = now - min(r.started_at for r in survivors)
+            history = now - first_backup
+            self.assertGreaterEqual(
+                window, min(prune.RECOVERY_WINDOW, history), f"window too short at {now}"
+            )
+            self.assertLessEqual(window, dt.timedelta(days=14) + slack, f"window unbounded at {now}")
+            self.assertLessEqual(len(survivors), 5, f"too many bases kept at {now}")
+
+    def test_a_month_of_backups_keeps_a_bounded_seven_day_window(self):
+        start = at("2026-09-01T00:00:00")
+        pauses = (
+            # A seven-hour pause, like the 2026-10-10 macOS upgrade...
+            (at("2026-09-10T13:57:00"), at("2026-09-10T20:53:00")),
+            # ...and a three-day outage across a week boundary.
+            (at("2026-09-20T06:00:00"), at("2026-09-23T06:00:00")),
+        )
+        runs = simulate([], start, at("2026-10-06T00:00:00"), pauses)
+        self.assert_window_holds(runs, backup_at(start).started_at, slack=dt.timedelta(days=3))
+        _, last = runs[-1]
+        self.assertLess(
+            prune.RECOVERY_WINDOW,
+            runs[-1][0] - min(r.started_at for r in last),
+        )
+
+    def test_the_2026_10_18_state_keeps_its_old_floor_until_a_successor_comes_of_age(self):
+        # What the old rule left: the 2026-10-10 backup and this morning's.
+        survivors = [backup_at(at(value)) for value in (
+            "2026-10-10T13:30:00", "2026-10-18T08:00:00", "2026-10-18T08:30:00", "2026-10-18T09:00:00",
+        )]
+        runs = simulate(survivors, at("2026-10-18T09:05:00"), at("2026-11-08T00:00:00"))
+        # The old rule left nothing between 2026-10-10 and this morning, so the
+        # 2026-10-10 backup is held until this morning's comes of age: a window
+        # of fourteen days and eighteen hours at its widest.
+        self.assert_window_holds(runs, survivors[0].started_at, slack=dt.timedelta(days=1))
+
+        def kept_at(when: str) -> set[str]:
+            return {r.backup_id for now, kept in runs if now == at(when) for r in kept}
+
+        self.assertIn("20261010T133001", kept_at("2026-10-25T07:35:00"))
+        # This morning's 08:00 backup turns seven days old and becomes the
+        # floor, and only then is the 2026-10-10 backup released.
+        self.assertNotIn("20261010T133001", kept_at("2026-10-25T08:05:00"))
+        self.assertIn("20261018T080001", kept_at("2026-10-25T08:05:00"))
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ tags:
   - restore
   - cnpg
   - rustfs
-updated: 2026-07-04
+updated: 2026-10-18
 ---
 
 # CNPG And RustFS Backup/Restore Rehearsal
@@ -54,6 +54,32 @@ rtk kubectl --context docker-desktop -n saxo get jobs --sort-by=.metadata.creati
 rtk kubectl --context docker-desktop -n saxo logs job/<backup-job-name> --tail=120
 rtk kubectl --context docker-desktop -n saxo logs job/<retention-job-name> --tail=120
 ```
+
+## Retention
+
+A base backup is taken every 30 minutes (`daytrader-postgres-backup-schedule`, at :00 and :30) and WAL is archived continuously, so any moment after the oldest kept base backup can be restored. `daytrader-postgres-backup-retention` runs at :05 and :35 and keeps:
+
+- the two newest base backups;
+- the first base backup of the current ISO week and of the previous one;
+- the newest base backup at least seven days old (the recovery floor).
+
+That is four or five base backups (about 180 MB each, compressed) and seven to fourteen days of WAL (about 60 MB a day): roughly 1–1.7 GB in all, against a recovery window that is never shorter than seven days. The policy is `_checkpoint_selection` in `scripts/prune_postgres_backups.py`; `scripts/test_prune_postgres_backups.py` simulates weeks of runs, including a pause and an outage.
+
+CNPG's own `retentionPolicy` is `3650d`, so CNPG never removes anything; the retention job is the only thing that does. It removes base backups outside the set above and, when `WAL_PRUNE` allows, the archived WAL that precedes the oldest kept base backup's `begin_wal`, which no restore can use. History files are never touched, and nothing is pruned if that `begin_wal` cannot be read or the backup's own WAL is missing.
+
+`WAL_PRUNE` on the retention CronJob (`deploy/k8s/base/postgres-backup-retention.yaml`):
+
+- `off`: WAL is never touched (the script's default).
+- `dry_run`: each run reports `wal_pruning` (objects and bytes it would remove) in the job log and removes nothing.
+- `delete`: removes them. Permanent; changing the manifest to `delete` and releasing is an operator decision.
+
+Read what a run did or would do:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo logs job/<retention-job-name> | rg -o "'wal_pruning': \{[^}]*\}\}?"
+```
+
+Lesson, 2026-10-18: the bucket had reached 8.5 GB, 7.9 GB of it WAL older than the oldest kept base backup. Two faults compounded. Retention deleted base backups but never their WAL. And the previous rule kept "the newest backup at least 1h/8h/24h/72h/1w old" out of what the last run left, so every backup was pruned at about 90 minutes and none ever reached 8h: the 2026-10-10 13:30 backup, carried into the 8h slot by a seven-hour cluster pause, held every long slot at once and would never have aged out. Recovery was never at risk (WAL from that backup covers everything since), and the base-backup freshness signal stayed green because the newest backup was always fresh. A retention rule has to be checked over weeks of runs, not one snapshot.
 
 ## Manual Backup Rehearsal
 

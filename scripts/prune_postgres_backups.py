@@ -23,14 +23,8 @@ class BackupRecord:
     server_name: str
 
 
-# Checkpoint ages: keep the most-recent backup that is at least this old.
-_CHECKPOINT_AGES = [
-    dt.timedelta(hours=1),
-    dt.timedelta(hours=8),
-    dt.timedelta(hours=24),
-    dt.timedelta(hours=72),
-    dt.timedelta(weeks=1),
-]
+# Point-in-time recovery must always reach at least this far back.
+RECOVERY_WINDOW = dt.timedelta(days=7)
 
 
 def _utc_now() -> dt.datetime:
@@ -108,17 +102,26 @@ def _delete_backup_record(namespace: str, name: str) -> None:
         response.raise_for_status()
 
 
-def _age_label(age: dt.timedelta) -> str:
-    h = int(age.total_seconds() // 3600)
-    return "1w" if h >= 168 else f"{h}h"
-
-
 def _checkpoint_selection(completed: list[BackupRecord]) -> dict[str, str]:
-    """
-    Keep:
-      - 2 most-recent backups  (provides ~30-min granularity)
-      - for each checkpoint age: the most-recent backup that is at least that old
-    Returns {backup_id: reason_label}.
+    """Which base backups to keep, as {backup_id: reason}.
+
+    Continuous WAL archiving makes every moment after the oldest kept base
+    backup restorable, so further bases only shorten replay and cover one being
+    unreadable. What retention must guarantee is a recovery window of at least
+    RECOVERY_WINDOW and a bounded footprint. It keeps:
+      - the two newest backups;
+      - the first backup of the current ISO week and of the previous one;
+      - the newest backup at least RECOVERY_WINDOW old (the floor).
+    Four or five base backups and seven to fourteen days of WAL.
+
+    Each rule picks a backup that stays put as time passes (a calendar week) or
+    that a kept backup grows into (the floor), so the previous week's first
+    backup is still there when it comes of age. The rule this replaces kept
+    "the newest backup at least 1h/8h/24h/72h/1w old" out of whatever the last
+    run left. Everything past the two newest and the 1h slot was pruned at
+    about 90 minutes, so no backup ever reached 8h; the 2026-10-10 backup, which
+    a seven-hour cluster pause carried straight into the 8h slot, then filled
+    every longer slot at once and would never have aged out, nor its WAL.
     """
     now = _utc_now()
     kept: dict[str, str] = {}
@@ -127,14 +130,20 @@ def _checkpoint_selection(completed: list[BackupRecord]) -> dict[str, str]:
     for record in by_time[:2]:
         kept[record.backup_id] = "recent"
 
-    for age in _CHECKPOINT_AGES:
-        cutoff = now - age
-        label = f"checkpoint-{_age_label(age)}"
-        for record in by_time:
-            if record.started_at <= cutoff:
-                if record.backup_id not in kept:
-                    kept[record.backup_id] = label
-                break
+    weeks = (
+        (now.isocalendar()[:2], "first-this-week"),
+        ((now - dt.timedelta(weeks=1)).isocalendar()[:2], "first-last-week"),
+    )
+    for week, label in weeks:
+        in_week = [r for r in by_time if r.started_at.isocalendar()[:2] == week]
+        if in_week:
+            kept.setdefault(in_week[-1].backup_id, label)
+
+    cutoff = now - RECOVERY_WINDOW
+    for record in by_time:
+        if record.started_at <= cutoff:
+            kept.setdefault(record.backup_id, "recovery-floor")
+            break
 
     return kept
 
@@ -410,7 +419,7 @@ def prune(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Checkpoint-based retention for CNPG base backups in S3-compatible storage.")
+    parser = argparse.ArgumentParser(description="Retention for CNPG base backups and their WAL in S3-compatible storage.")
     parser.add_argument("--namespace", default=os.getenv("NAMESPACE") or _service_account_namespace())
     parser.add_argument("--cluster", default=os.getenv("CLUSTER_NAME", "daytrader-postgres"))
     parser.add_argument("--bucket", default=os.getenv("BACKUP_BUCKET", "daytrader-cnpg"))
