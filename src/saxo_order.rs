@@ -1709,6 +1709,7 @@ async fn execute_order(
             .await;
         }
     };
+    record_submission_quote(state, session, order_id, &request_payload).await;
     let request_id = placement_request_id(order_id);
     let broker_result = match place_order(state, session, &request_id, &request_payload).await {
         Ok(result) => result,
@@ -1780,6 +1781,81 @@ async fn execute_order(
         "broker_result": broker_result,
         "precheck": precheck
     }))
+}
+
+/// How long placement waits for the submission quote before going ahead
+/// without it. The quote is measurement, not a precondition.
+const SUBMISSION_QUOTE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Reads and stores the instrument's bid and ask just before placement, so a
+/// fill can later be measured against the market it met (`fill_quality`).
+///
+/// Never fatal. The Saxo read is bounded by `SUBMISSION_QUOTE_TIMEOUT` and
+/// followed by one local row; an unreadable quote is recorded as unavailable
+/// and the order goes ahead unchanged. Only a failure category is stored or
+/// logged, because a transport error can print the request URL and the URL
+/// carries the account key.
+async fn record_submission_quote(
+    state: &AppState,
+    session: &JsonValue,
+    order_id: i64,
+    payload: &JsonValue,
+) {
+    let observed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let quote = match tokio::time::timeout(
+        SUBMISSION_QUOTE_TIMEOUT,
+        fetch_submission_quote(state, session, payload),
+    )
+    .await
+    {
+        Ok(Ok(quote)) => quote,
+        Ok(Err(err)) => crate::fill_quality::SubmissionQuote::unavailable(
+            &crate::fill_quality::failure_category(&format!("{err:#}")),
+        ),
+        Err(_) => crate::fill_quality::SubmissionQuote::unavailable("timeout"),
+    };
+    if quote.status != "ok" {
+        warn!(
+            order_id,
+            status = quote.status,
+            detail = quote.detail.as_deref().unwrap_or_default(),
+            "submission quote not usable; the order goes ahead without it"
+        );
+    }
+    if let Err(err) =
+        crate::fill_quality::store_submission_quote(state, order_id, &observed_at, &quote).await
+    {
+        warn!(order_id, "recording the submission quote failed: {err:#}");
+    }
+}
+
+async fn fetch_submission_quote(
+    state: &AppState,
+    session: &JsonValue,
+    payload: &JsonValue,
+) -> Result<crate::fill_quality::SubmissionQuote> {
+    let Some(uic) = payload.get("Uic").and_then(JsonValue::as_i64) else {
+        return Ok(crate::fill_quality::SubmissionQuote::unavailable("no_uic"));
+    };
+    let asset_type = payload
+        .get("AssetType")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("Stock")
+        .to_string();
+    let query = vec![
+        (
+            "AccountKey",
+            crate::markov_method::account_key(state, session)?,
+        ),
+        ("Uic", uic.to_string()),
+        ("AssetType", asset_type),
+        ("FieldGroups", "Quote".to_string()),
+    ];
+    let answer =
+        crate::markov_method::saxo_get_json(state, session, "/trade/v1/infoprices", &query).await?;
+    Ok(crate::fill_quality::submission_quote_from_infoprice(
+        &answer,
+    ))
 }
 
 async fn build_order_payload(
@@ -4500,6 +4576,48 @@ mod tests {
             gap >= ChronoDuration::days(13)
                 && gap <= ChronoDuration::days(13) + ChronoDuration::hours(1),
             "expected roughly a 13-day window with second-level rounding only, got {gap:?}"
+        );
+    }
+
+    /// The submission quote is measurement. With no usable session it is
+    /// recorded as unavailable, within its bound, and nothing fails; without
+    /// an instrument to ask about, it says so.
+    #[tokio::test]
+    async fn an_unreadable_submission_quote_is_recorded_and_never_fatal() {
+        let state = execution_order_test_state().await;
+        for sql in crate::fill_quality::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&state.pool)
+                .await
+                .expect("create submission quote table");
+        }
+        let started = std::time::Instant::now();
+        record_submission_quote(
+            &state,
+            &json!({}),
+            42,
+            &json!({"Uic": 211, "AssetType": "Stock"}),
+        )
+        .await;
+        record_submission_quote(&state, &json!({}), 43, &json!({})).await;
+        assert!(started.elapsed() < 2 * SUBMISSION_QUOTE_TIMEOUT);
+
+        let rows = sqlx::query(
+            "SELECT execution_order_id, status, detail FROM order_submission_quotes
+             ORDER BY execution_order_id",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read submission quotes");
+        let read = |index: usize, column: &str| rows[index].try_get::<String, _>(column).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (read(0, "status"), read(0, "detail")),
+            ("unavailable".into(), "request_failed".into())
+        );
+        assert_eq!(
+            (read(1, "status"), read(1, "detail")),
+            ("unavailable".into(), "no_uic".into())
         );
     }
 

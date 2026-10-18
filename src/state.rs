@@ -6883,6 +6883,12 @@ impl AppState {
                 .await
                 .context("creating daily indicator runtime tables")?;
         }
+        for sql in crate::fill_quality::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating order submission quote table")?;
+        }
         for sql in crate::price_bars::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)

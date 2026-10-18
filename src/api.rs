@@ -218,6 +218,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/operator-actions", get(operator_actions))
         .route("/api/evaluation/entries", get(entry_evaluation))
         .route("/api/evaluation/exits", get(exit_evaluation))
+        .route("/api/evaluation/fills", get(fill_quality))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -1994,6 +1995,23 @@ async fn jev_observations(
 /// recited. A degraded read is marked `unavailable` with its reason rather
 /// than served as an empty summary, because an empty evaluation and a failed
 /// one are different answers.
+async fn fill_quality(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Json<crate::models::FillQualityPayload> {
+    match crate::fill_quality::fill_quality_payload(&state, params.limit.unwrap_or(500)).await {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("fill quality endpoint degraded: {err:#}");
+            Json(crate::models::FillQualityPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
 async fn exit_evaluation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LimitParams>,

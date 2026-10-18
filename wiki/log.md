@@ -3343,3 +3343,20 @@ broker mutation was added.
   - A high, low or open Saxo did not send is stored as NULL, never copied from the close. The indicator math still falls back to the close as before.
 - **Safety.** Storage cannot fail the indicator run: a failed write is counted in the run summary (`price_bars.failed_symbols`) and the technical gate's evidence is unchanged.
 - **Owed after the first run** (weekday 23:45 Copenhagen, so Monday 2026-10-19): check that each symbol's bar for the run date has the same close as its `daily_indicator_signals` row. That confirms the session date read from Saxo's `Time` lines up.
+
+## [2026-10-18] Execution | Submission quotes and realised fill quality
+
+- **Why.** The edge review's one clear entry effect was a −0.69% gross loss by the first close, in every market and both fill windows. Nothing stored could split it into spread, slippage, timing or stock choice.
+  - Each order's `price_local` equals its fill price on all 109 BUY fills checked, because it is overwritten after execution.
+  - No quote is kept from submission; the realised-sell panel says `unavailable_no_quote_at_submission`.
+  - The precheck response carries cost estimates, not a quote. Reading it back would also mean touching stored payloads that hold the account key.
+- **Capture.** `saxo_order::execute_order` now reads `/trade/v1/infoprices` for the instrument after the precheck and just before placement, and stores bid, ask, price types, delay and market state in `order_submission_quotes`.
+  - The read is bounded at 2 s and can never fail the order.
+  - An unreadable quote is stored as `unavailable` with a category only (`http_404`, `timeout`, `request_failed`, `no_uic`), never error text, because a transport error can print the request URL and its account key.
+- **Measurement.** `/api/evaluation/fills` (`src/fill_quality.rs`) gives, per fill:
+  - slippage against the mid, the half-spread, and the cost beyond the touch;
+  - from `daily_price_bars`, the position in the session's range, the open-to-fill move and the fill-to-close move.
+  - Every figure is signed so that positive is worse for the book.
+  - A fill outside its stored bar is flagged, not clamped.
+- **Data from:** the next order placed (Monday 2026-10-19) for quotes; the first indicator run that night for bars. Earlier fills show `not_recorded`.
+- **Tests.** Seven in `fill_quality` (quote parsing, error categories, signs on both sides, range placement, the outside-the-bar flag, summaries, the builder's joins) and one in `saxo_order` (an unreadable quote is recorded and never fatal).

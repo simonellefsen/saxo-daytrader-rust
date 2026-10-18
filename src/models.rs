@@ -2322,6 +2322,83 @@ pub struct ExitEvaluationPayload {
     pub unavailable_reason: Option<String>,
 }
 
+/// One fill measured against the quote at submission and its session's bar.
+///
+/// Every `_bps` figure is signed so that positive is worse for the book.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FillQualityRowPayload {
+    pub symbol: String,
+    pub side: String,
+    pub filled_at: String,
+    pub order_type: Option<String>,
+    pub fill_price_local: f64,
+    pub quantity: f64,
+    /// `ok`, `unusable`, `unavailable`, or `not_recorded` for fills placed
+    /// before submission quotes were captured.
+    pub quote_status: String,
+    pub quote_detail: Option<String>,
+    pub quote_observed_at: Option<String>,
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub price_type_bid: Option<String>,
+    pub price_type_ask: Option<String>,
+    pub delayed_by_minutes: Option<i64>,
+    /// Fill against the mid at submission.
+    pub slippage_vs_mid_bps: Option<f64>,
+    /// Half the quoted spread: what crossing it costs on one side.
+    pub half_spread_bps: Option<f64>,
+    /// Fill against the quoted touch (the ask for a BUY, the bid for a SELL).
+    pub beyond_touch_bps: Option<f64>,
+    /// `matched`, `no_bar`, `no_range`, or `fill_outside_range` when the fill
+    /// does not lie inside the stored bar, which means the two disagree.
+    pub bar_status: String,
+    pub bar_open: Option<f64>,
+    pub bar_high: Option<f64>,
+    pub bar_low: Option<f64>,
+    pub bar_close: Option<f64>,
+    /// Where the fill sat in the session's range: 0 at the low, 1 at the high.
+    pub position_in_range: Option<f64>,
+    /// Fill against the session open.
+    pub open_to_fill_bps: Option<f64>,
+    /// Session close against the fill; positive means the price moved against
+    /// the book by the close.
+    pub fill_to_close_bps: Option<f64>,
+}
+
+/// Fills of one side, summarised.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FillQualitySummaryPayload {
+    pub side: String,
+    pub fills: i64,
+    pub quote_ok: i64,
+    /// Of `quote_ok`, quotes Saxo marked tradable on both sides.
+    pub quote_tradable: i64,
+    pub mean_slippage_vs_mid_bps: Option<f64>,
+    pub median_slippage_vs_mid_bps: Option<f64>,
+    pub mean_half_spread_bps: Option<f64>,
+    pub mean_beyond_touch_bps: Option<f64>,
+    pub bar_matched: i64,
+    pub mean_position_in_range: Option<f64>,
+    pub mean_open_to_fill_bps: Option<f64>,
+    pub mean_fill_to_close_bps: Option<f64>,
+}
+
+/// `/api/evaluation/fills`: realised execution cost and intraday timing.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FillQualityPayload {
+    pub summaries: Vec<FillQualitySummaryPayload>,
+    /// What each figure means and what it cannot claim, as written.
+    pub definitions: BTreeMap<String, String>,
+    pub generated_at: String,
+    pub fills: Vec<FillQualityRowPayload>,
+    /// Set only when the evaluation could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
 /// What the Jev observation worker did on its latest cycle, step by step.
 ///
 /// Written by the worker itself, so a backlog is the one its own selection

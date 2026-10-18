@@ -18,6 +18,7 @@ mod entry_evaluation;
 mod entry_evaluation_state;
 mod execution_state;
 mod exit_evaluation;
+mod fill_quality;
 mod fx;
 mod hermes_data_requests;
 mod hermes_state;
