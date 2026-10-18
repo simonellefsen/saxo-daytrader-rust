@@ -68,6 +68,7 @@ script-check:
 	bash -n scripts/deploy_k8s_docker_desktop.sh
 	bash -n scripts/post_deploy_guard.sh
 	bash -n scripts/post_deploy_smoke.sh
+	python3 -m unittest discover -s scripts -p 'test_*.py'
 
 validate: fmt-check script-check test check
 

@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,15 +34,15 @@ _CHECKPOINT_AGES = [
 
 
 def _utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
+    return dt.datetime.now(dt.timezone.utc)
 
 
 def _parse_time(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.UTC)
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
 
 
 def _parse_backup_id(value: str) -> dt.datetime:
-    return dt.datetime.strptime(value, "%Y%m%dT%H%M%S").replace(tzinfo=dt.UTC)
+    return dt.datetime.strptime(value, "%Y%m%dT%H%M%S").replace(tzinfo=dt.timezone.utc)
 
 
 def _service_account_namespace() -> str:
@@ -177,6 +178,100 @@ def _delete_prefix(s3: Any, bucket: str, prefix: str) -> int:
     return deleted
 
 
+# A WAL segment name: timeline, log and segment, 24 hex digits. Archived names
+# can carry a suffix (`.gz`, `.partial`, `.00000028.backup`); the 24-digit stem
+# orders them. Timeline `.history` files do not match and are never pruned.
+_WAL_SEGMENT = re.compile(r"^([0-9A-F]{24})(?:\.|$)")
+
+WAL_PRUNE_MODES = ("off", "dry_run", "delete")
+
+
+def _begin_wal(s3: Any, bucket: str, server_name: str, backup_id: str) -> str | None:
+    """The first WAL segment a base backup needs, from its barman backup.info."""
+    try:
+        body = s3.get_object(Bucket=bucket, Key=f"{server_name}/base/{backup_id}/backup.info")["Body"].read()
+    except Exception:  # noqa: BLE001 - an unreadable backup.info means "do not prune"
+        return None
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "begin_wal":
+            value = value.strip()
+            return value if _WAL_SEGMENT.match(value) else None
+    return None
+
+
+def _wal_objects(s3: Any, bucket: str, server_name: str) -> list[tuple[str, str, int]]:
+    """Every archived WAL object as (key, 24-digit segment, size). History files
+    and anything else that is not a segment are left out, so they can never be
+    selected for deletion."""
+    prefix = f"{server_name}/wals/"
+    found: list[tuple[str, str, int]] = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for item in page.get("Contents", []):
+            key = str(item["Key"])
+            match = _WAL_SEGMENT.match(key.rsplit("/", 1)[-1])
+            if match:
+                found.append((key, match.group(1), int(item.get("Size", 0))))
+    return found
+
+
+def prune_wal(
+    s3: Any, bucket: str, server_name: str, kept_backup_ids: list[str], mode: str
+) -> dict[str, Any]:
+    """Removes archived WAL that no kept base backup can use.
+
+    A restore starts from a base backup and replays WAL from that backup's
+    begin_wal onwards, so every segment ordered before the oldest kept backup's
+    begin_wal serves no restore at all. Base retention deleted old backups but
+    never their WAL, which is how 7.9 GB accumulated by 2026-10-18 against
+    1.1 GB that a restore could still use.
+
+    Refuses rather than guesses: nothing is pruned without a kept backup whose
+    begin_wal can be read, and nothing is pruned if no segment at or after that
+    point exists, because that would mean the backup's own WAL is missing.
+    """
+    report: dict[str, Any] = {"mode": mode}
+    if mode == "off":
+        return {**report, "status": "off"}
+    if not kept_backup_ids:
+        return {**report, "status": "skipped_no_kept_backup"}
+    oldest = min(kept_backup_ids, key=_parse_backup_id)
+    begin = _begin_wal(s3, bucket, server_name, oldest)
+    report.update({"oldest_kept_backup": oldest, "begin_wal": begin})
+    if begin is None:
+        return {**report, "status": "skipped_begin_wal_unreadable"}
+    objects = _wal_objects(s3, bucket, server_name)
+    obsolete = [(key, size) for key, segment, size in objects if segment < begin]
+    needed = [key for key, segment, _ in objects if segment >= begin]
+    report.update(
+        {
+            "obsolete_objects": len(obsolete),
+            "obsolete_bytes": sum(size for _, size in obsolete),
+            "kept_objects": len(needed),
+        }
+    )
+    if not needed:
+        return {**report, "status": "skipped_backup_wal_missing"}
+    if mode == "dry_run" or not obsolete:
+        return {**report, "status": "dry_run" if mode == "dry_run" else "nothing_to_prune", "deleted_objects": 0}
+    deleted = failed = 0
+    keys = [key for key, _ in obsolete]
+    for start in range(0, len(keys), 1000):
+        batch = keys[start : start + 1000]
+        response = s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True})
+        # Quiet mode lists only the keys that were not deleted.
+        errors = len((response or {}).get("Errors", []))
+        deleted += len(batch) - errors
+        failed += errors
+    return {
+        **report,
+        "status": "deleted" if not failed else "partially_deleted",
+        "deleted_objects": deleted,
+        "failed_objects": failed,
+    }
+
+
 def _record_backup_heartbeat(valid_completed: list[BackupRecord], dry_run: bool) -> str:
     """Publish the newest verified base backup where the application can read it.
 
@@ -285,9 +380,22 @@ def prune(args: argparse.Namespace) -> dict[str, Any]:
             prefix = f"{sn}/base/{backup_id}/"
             deleted_object_prefixes[prefix] = 0 if args.dry_run else _delete_prefix(s3, args.bucket, prefix)
 
+    wal_mode = "dry_run" if args.dry_run and args.wal_prune == "delete" else args.wal_prune
+    wal_pruning = {
+        sn: prune_wal(
+            s3,
+            args.bucket,
+            sn,
+            [r.backup_id for r in valid_completed if r.server_name == sn and r.backup_id in kept_ids],
+            wal_mode,
+        )
+        for sn in server_names
+    }
+
     return {
         "status": "ok",
         "dry_run": args.dry_run,
+        "wal_pruning": wal_pruning,
         "cluster": args.cluster,
         "namespace": args.namespace,
         "completed_backups": len(completed),
@@ -308,6 +416,8 @@ def main() -> int:
     parser.add_argument("--bucket", default=os.getenv("BACKUP_BUCKET", "daytrader-cnpg"))
     parser.add_argument("--endpoint-url", default=os.getenv("S3_ENDPOINT_URL", "http://host.docker.internal:9000"))
     parser.add_argument("--dry-run", action="store_true")
+    # Off unless asked. `dry_run` reports what would go; `delete` removes it.
+    parser.add_argument("--wal-prune", choices=WAL_PRUNE_MODES, default=os.getenv("WAL_PRUNE", "off"))
     args = parser.parse_args()
 
     print(prune(args))

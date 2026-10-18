@@ -69,6 +69,13 @@ spec:
                       key: database-url
                 - name: BACKUP_BUCKET
                   value: daytrader-cnpg
+                # WAL older than the oldest kept base backup serves no restore,
+                # and base retention never removed it: 7.9 GB of the 8.5 GB
+                # bucket on 2026-10-18. `dry_run` reports what would go in the
+                # job log (`wal_pruning`); `delete` removes it. Deletion is
+                # permanent, so switching to `delete` is the operator's call.
+                - name: WAL_PRUNE
+                  value: dry_run
                 - name: S3_ENDPOINT_URL
                   value: http://host.docker.internal:9000
                 - name: AWS_ACCESS_KEY_ID
