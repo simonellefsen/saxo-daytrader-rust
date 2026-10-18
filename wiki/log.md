@@ -3325,3 +3325,4 @@ broker mutation was added.
 - **Limit.** Close-basis only: no intraday highs or lows are stored.
 - **Tests.** Nine pure tests (stop order, trail ratchet, bracket, window gating, ATR skips, pairing, sample split), one of which holds `hold_20` equal to the entry evaluation's 20-session return. One in-memory SQLite test runs the builder end to end.
 - The fill query is now shared between the two evaluations (`buy_fills`). The exit builder infers each exchange's holiday calendar once; the entry evaluation still does it once per fill.
+- **First in-sample read** (release `60b31f2`, 68 entries): no rule separates from holding. Mean differences run −0.33 to +0.07 points and every interval spans zero; every rule is net negative. Recorded against the hypotheses in [exit rules v1](experiments/2026-10-18-exit-rules-v1.md#results).

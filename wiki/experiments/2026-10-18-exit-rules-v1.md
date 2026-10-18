@@ -13,7 +13,7 @@ sources:
 
 # Exit rules v1: replayed over every entry
 
-**Status:** registered 2026-10-18, before the first result was read. Measuring; nothing changes live behaviour.
+**Status:** registered 2026-10-18 before the first read; first in-sample read recorded below. Out-of-sample accumulating; nothing changes live behaviour.
 
 Read-only. `/api/evaluation/exits` replays a frozen set of exit rules over every BUY fill. It proposes nothing, gates nothing and reaches no broker.
 
@@ -70,4 +70,30 @@ Changing any rule, the window or the cost model means `exit-v2`, not an edit.
 
 ## Results
 
-None read yet. Record the first in-sample read here, dated, with the endpoint's `ruleset_version`.
+### First in-sample read, 2026-10-18 (`exit-v1-2026-10-18`, release `60b31f2`)
+
+Current book, 68 entries with a full 20-session window (38 pending, 1 unavailable). No out-of-sample entry has resolved yet.
+
+| Rule | Gross | Net | Net > 0 | Mean exit session | vs `hold_20` | 95% interval | Exits |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `fixed_stop_6pct` | −0.12% | −0.63% | 40% | 14.8 | −0.32 | −1.21 to +0.57 | 30 stop, 38 window end |
+| `fixed_stop_10pct` | +0.11% | −0.40% | 43% | 18.3 | −0.09 | −0.60 to +0.43 | 13 stop |
+| `atr_trail_3x` | +0.27% | −0.24% | 44% | 16.3 | +0.07 | −0.65 to +0.79 | 32 trail |
+| `atr_bracket_2x` | +0.24% | −0.27% | 47% | 12.0 | +0.04 | −1.51 to +1.60 | 28 stop, 23 target |
+| `time_exit_10` | −0.13% | −0.64% | 46% | 10.0 | −0.33 | −2.08 to +1.43 | 68 time |
+| `hold_20` | +0.19% | −0.32% | 43% | 20.0 | — | — | 68 window end |
+
+`hold_20` reproduces the entry evaluation's 20-session gross (+0.19%, n=68).
+
+Against the hypotheses:
+
+1. **`fixed_stop_6pct` trails holding**, as predicted (−0.32 points), but the interval spans zero.
+2. **The wider rules trail by less**, as predicted (`fixed_stop_10pct` −0.09, `atr_trail_3x` +0.07), but within noise.
+3. **The bracket** is +0.04 with the widest interval of the stop rules. Its target fired on 23 of 68 entries.
+4. **`time_exit_10` is within noise of holding**, as predicted.
+
+**Reading.** Over a 20-session window and on closes, the choice of exit rule moves the mean by at most a third of a point, and every rule is net negative. This fits the edge review's headline: with no edge in the entries, a better exit can only lose less.
+
+This does not contradict the review's per-lot finding (1.5–1.7 points at 5–10 sessions). That was conditional on lots a live stop closed early, with intraday fills. Here a stop that never fires contributes zero, and the replay is close-basis.
+
+Next read: when out-of-sample entries resolve. Nothing here supports a live change.
