@@ -60,6 +60,7 @@ mod performance_benchmarks;
 mod performance_state;
 mod portfolio_reset;
 mod portfolio_state;
+mod price_bars;
 mod price_monitor;
 mod protective_stop_state;
 mod protective_stops;

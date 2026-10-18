@@ -97,3 +97,5 @@ Against the hypotheses:
 This does not contradict the review's per-lot finding (1.5–1.7 points at 5–10 sessions). That was conditional on lots a live stop closed early, with intraday fills. Here a stop that never fires contributes zero, and the replay is close-basis.
 
 Next read: when out-of-sample entries resolve. Nothing here supports a live change.
+
+**Close basis, and what would lift it.** From 2026-10-19 the indicator run keeps daily highs and lows in `daily_price_bars`, backfilled a year. A stop or target touched intraday can then be replayed properly. That is a different measurement, so it would be `exit-v2`, registered before its first read, never an edit to v1.

@@ -285,11 +285,31 @@ async fn run_for_date(
     let mut success_count = 0usize;
     let mut error_count = 0usize;
     let mut ok_rows = Vec::new();
+    let mut bars_stored = 0usize;
+    let mut bar_store_errors = 0usize;
 
     for asset in &assets {
         let row = match analyze_asset(state, &session, config, asset).await {
-            Ok((instrument, sample_count, analysis)) => {
+            Ok((instrument, bars, analysis)) => {
                 success_count += 1;
+                // Kept for the exit evaluation. Never fatal: the technical
+                // gate reads the signal row below, not the bars.
+                match crate::price_bars::store_bars(
+                    state,
+                    &asset.symbol,
+                    &asset.analysis_symbol,
+                    &run_id,
+                    &bars,
+                )
+                .await
+                {
+                    Ok(count) => bars_stored += count,
+                    Err(err) => {
+                        bar_store_errors += 1;
+                        warn!(symbol = %asset.symbol, "storing daily price bars failed: {err:#}");
+                    }
+                }
+                let sample_count = bars.len();
                 signal_row_json(
                     &run_id,
                     &created_at,
@@ -339,6 +359,7 @@ async fn run_for_date(
         "success_count": success_count,
         "error_count": error_count,
         "signals": ok_rows.iter().take(20).cloned().collect::<Vec<_>>(),
+        "price_bars": {"stored": bars_stored, "failed_symbols": bar_store_errors},
     });
     // Mature shadow observations only after the locally persisted indicator
     // closes are available. This performs no additional Saxo/provider call and
@@ -381,7 +402,11 @@ async fn analyze_asset(
     session: &JsonValue,
     config: &IndicatorConfig,
     asset: &MarkovAsset,
-) -> Result<(SaxoInstrument, usize, IndicatorAnalysis)> {
+) -> Result<(
+    SaxoInstrument,
+    Vec<crate::price_bars::ChartBar>,
+    IndicatorAnalysis,
+)> {
     let instrument = resolve_instrument(state, session, &asset.analysis_symbol)
         .await
         .with_context(|| {
@@ -398,14 +423,15 @@ async fn analyze_asset(
                 asset_analysis_label(asset)
             )
         })?;
-    let analysis = analyze_bars(&bars, config.min_reward_risk, config.min_confluences)
+    let ohlc: Vec<OhlcBar> = bars.iter().map(crate::price_bars::ChartBar::ohlc).collect();
+    let analysis = analyze_bars(&ohlc, config.min_reward_risk, config.min_confluences)
         .with_context(|| {
             format!(
                 "computing daily indicators for {}",
                 asset_analysis_label(asset)
             )
         })?;
-    Ok((instrument, bars.len(), analysis))
+    Ok((instrument, bars, analysis))
 }
 
 fn asset_analysis_label(asset: &MarkovAsset) -> String {
@@ -421,7 +447,7 @@ async fn fetch_ohlc_bars(
     session: &JsonValue,
     instrument: &SaxoInstrument,
     config: &IndicatorConfig,
-) -> Result<Vec<OhlcBar>> {
+) -> Result<Vec<crate::price_bars::ChartBar>> {
     let query = vec![
         ("AccountKey", account_key(state, session)?),
         ("AssetType", instrument.asset_type.clone()),
@@ -431,31 +457,7 @@ async fn fetch_ohlc_bars(
         ("FieldGroups", "ChartInfo,Data,DisplayAndFormat".to_string()),
     ];
     let payload = saxo_get_json(state, session, "/chart/v3/charts", &query).await?;
-    let mut rows = payload
-        .get("Data")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|item| {
-            let close = number_from_keys(&item, &["Close", "ClosePrice", "close", "LastTraded"])?;
-            if close <= 0.0 {
-                return None;
-            }
-            let high = number_from_keys(&item, &["High", "high"]).unwrap_or(close);
-            let low = number_from_keys(&item, &["Low", "low"]).unwrap_or(close);
-            let time = item
-                .get("Time")
-                .or_else(|| item.get("time"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_default()
-                .to_string();
-            Some((time, OhlcBar { high, low, close }))
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.0.cmp(&right.0));
-    rows.dedup_by(|left, right| left.0 == right.0);
-    Ok(rows.into_iter().map(|(_, bar)| bar).collect())
+    Ok(crate::price_bars::chart_bars(&payload))
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,16 +1117,6 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
         }));
     }
     Ok(json!({"latest_run": run, "signals": signals}))
-}
-
-fn number_from_keys(value: &JsonValue, keys: &[&str]) -> Option<f64> {
-    keys.iter().find_map(|key| {
-        value.get(key).and_then(|v| {
-            v.as_f64()
-                .or_else(|| v.as_i64().map(|n| n as f64))
-                .or_else(|| v.as_str()?.parse().ok())
-        })
-    })
 }
 
 #[cfg(test)]

@@ -3333,3 +3333,13 @@ broker mutation was added.
 - The 11:05 retention run deleted 36,441 WAL objects (7.84 GB) with 0 failures. It kept 2,121 objects and four base backups: 11:00, 10:30, 08:00 this morning, and 2026-10-10 13:30.
 - RustFS moved the deleted objects to `.rustfs.sys/tmp/.trash` and purged them over about 20 minutes. The store went from 8.7 GB to about 1.1 GB: 663 MB of base backups and 469 MB of WAL.
 - The [runbook](runbooks/backup-restore.md#retention) now notes the trash delay.
+
+## [2026-10-18] Data | Daily price bars kept from the indicator run
+
+- **Why.** The exit evaluation replays stops and targets on closes only, because no daily high or low was stored. The indicator run already fetched five years of daily bars per symbol from Saxo and discarded all but the newest close and ATR14.
+- **What.** `daily_price_bars` (`src/price_bars.rs`) keeps one row per traded symbol and session date: open, high, low and close.
+  - The first run for a symbol backfills 260 sessions. Later runs write new bars and rewrite the last 7 days, so a bar Saxo corrected is replaced.
+  - No extra Saxo call; the writes are batched.
+  - A high, low or open Saxo did not send is stored as NULL, never copied from the close. The indicator math still falls back to the close as before.
+- **Safety.** Storage cannot fail the indicator run: a failed write is counted in the run summary (`price_bars.failed_symbols`) and the technical gate's evidence is unchanged.
+- **Owed after the first run** (weekday 23:45 Copenhagen, so Monday 2026-10-19): check that each symbol's bar for the run date has the same close as its `daily_indicator_signals` row. That confirms the session date read from Saxo's `Time` lines up.
