@@ -73,6 +73,8 @@ CNPG's own `retentionPolicy` is `3650d`, so CNPG never removes anything; the ret
 - `dry_run`: each run reports `wal_pruning` (objects and bytes it would remove) in the job log and removes nothing.
 - `delete`: removes them. Permanent; changing the manifest to `delete` and releasing is an operator decision.
 
+Space comes back gradually. RustFS moves deleted objects into `rustfs/.rustfs.sys/tmp/.trash` and purges them in the background. On 2026-10-18, 36,441 deleted WAL objects (7.5 GB) took about 20 minutes to clear, so `du` straight after a run still shows the old size. Leave the trash to RustFS.
+
 Read what a run did or would do:
 
 ```bash

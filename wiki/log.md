@@ -3326,3 +3326,10 @@ broker mutation was added.
 - **Tests.** Nine pure tests (stop order, trail ratchet, bracket, window gating, ATR skips, pairing, sample split), one of which holds `hold_20` equal to the entry evaluation's 20-session return. One in-memory SQLite test runs the builder end to end.
 - The fill query is now shared between the two evaluations (`buy_fills`). The exit builder infers each exchange's holiday calendar once; the entry evaluation still does it once per fill.
 - **First in-sample read** (release `60b31f2`, 68 entries): no rule separates from holding. Mean differences run −0.33 to +0.07 points and every interval spans zero; every rule is net negative. Recorded against the hypotheses in [exit rules v1](experiments/2026-10-18-exit-rules-v1.md#results).
+
+## [2026-10-18] Backups | WAL pruning switched to delete
+
+- Simon switched `WAL_PRUNE` to `delete` (`324498a`, released with 0 smoke warnings).
+- The 11:05 retention run deleted 36,441 WAL objects (7.84 GB) with 0 failures. It kept 2,121 objects and four base backups: 11:00, 10:30, 08:00 this morning, and 2026-10-10 13:30.
+- RustFS moved the deleted objects to `.rustfs.sys/tmp/.trash` and purged them over about 20 minutes. The store went from 8.7 GB to about 1.1 GB: 663 MB of base backups and 469 MB of WAL.
+- The [runbook](runbooks/backup-restore.md#retention) now notes the trash delay.
