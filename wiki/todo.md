@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - todo
   - maintained-by-llm
-updated: 2026-09-03
+updated: 2026-10-18
 ---
 
 # Daytrader Todo
@@ -57,6 +57,25 @@ Live record since the 2026-07-16 reset. **Restated 2026-09-03** from the realise
 | **Payoff ratio** | **0.43** |
 | Median holding time | 24.0 days (winners 31.0, losers 19.6) |
 | Cost basis sold | 384,456 DKK |
+
+**Restated 2026-10-18** from the same realised-sell panel and the 3M performance history:
+
+| | 2026-09-03 | 2026-10-18 |
+| --- | --- | --- |
+| Closed sales | 32 | **100** |
+| Wins / losses | 9 / 23 (28.1%) | **26 / 74 (26.0%)** |
+| Net realised | −21,298 DKK | **−28,646 DKK** |
+| Average win / average loss | 481 / −1,114 | **592 / −595** |
+| Payoff ratio | 0.43 | **0.99** |
+| Commission | 673 | 2,046 |
+
+- **The sales added since September lost far less each:** −7,348 DKK over 68 sales (−108 a sale) against −666 a sale before. The average loss halved while the average win held. The win rate did not move, so expectancy is still negative: 0.26 × 592 − 0.74 × 595 ≈ −287 DKK a sale.
+- **Total capital, 2026-07-17 to 2026-10-18:** 259,237 → 228,376 DKK, −30,860 (−11.9%).
+  - `total_market_value_dkk` already includes cash.
+  - Cash rose by 96,979 because holdings were sold down by 127,839. The cash is not a gain on top of the value.
+- **The fall is roughly the realised −28.6k plus an unrealised P/L that shrank** by 11.5k (15.6k → 4.1k).
+  - The remaining ~9k is not attributed by these figures. FX on the cash balance and cash-ledger timing are candidates; they are unverified.
+  - No deposit or withdrawal appears in the latest 250 ledger rows.
 
 **The payoff ratio is the number that matters, and it now has a mechanical explanation.** Every one of those 32 exits was a risk-reduction exit — 28 protective stops (−14,225 DKK) and 4 flattens (−7,073) — and **not one was a profit-taking exit**. Nothing in the runtime closes a position because it reached a target, so a win can only happen when a stop that trailed up gets hit. The nine wins are exactly that, which is why the average win is 481 DKK against an average loss of 1,114.
 
