@@ -3385,3 +3385,30 @@ broker mutation was added.
 - **Live read before deploy.** All 24 held positions carry `uic` and `asset_type`. Only ALKb and COLOb get a different indicator row, and each now gets a `Place`: 28 shares at about 228.65 and 14 at about 458.82, before tick normalisation. The other 22 see the same close and ATR as before. XCSE was closed when this was deployed, so the first placement is due at the next session open.
 - **Tests.** Three in `protective_stops`, against in-memory SQLite. A broker symbol that differs from its indicator symbol gets a `Place`. A position with a resting stop under the broker symbol gets no second `Place`. A shared `uic` in another asset type is not borrowed.
 - **Same mismatch, not fixed here:** see [urgent-todo](urgent-todo.md) U18. A SELL decision for `ALK-B:xcse` sees zero holdings.
+
+## [2026-10-23] Protective stops | A filled stop's lifecycle test is settled
+
+- **Found.** Broker sync marks a filled protective stop's `execution_orders` row `executed`. Nothing moved its `protective_stop_lifecycle_tests` row, so every stop that ever filled stayed `broker_working` there: **99 rows across 69 symbols**. `symbols_with_active_protective_stops` reads that table. Its only caller, the operator batch, skips those symbols with "a protective stop already exists". A symbol stopped out once and later re-bought could never be protected through the batch.
+  - The automatic sweep is unaffected: it reads `broker_position_snapshots` and `execution_orders`, and `place_one_protective_stop` checks lifecycle rows only per precheck id.
+  - The hazard was latent. Before the deploy, no held position was blocked only by a filled stop: each one in the active set also had a real resting stop.
+- **Fix** (`6cf7c10`). `sync_final_fill` settles the lifecycle row with the same `broker_order_id` to `filled`. The manual reconcile already writes that status for a FinalFill, and it is absent from the active-symbol list, the `idx_protective_stop_lifecycle_tests_active_source` guard and adoption.
+  - The update is conditional on the status it read, and the previous reconciliation is kept inside the new one.
+  - A failure is logged, not reported as a failed sync, because the fill is already durable.
+  - A startup backfill settles any row whose execution order is already `executed`. It is idempotent.
+- **Live, read-only, before → after deploy:**
+
+  | lifecycle / execution order | before | after |
+  |---|---|---|
+  | `broker_working` / `executed` | 99 | 0 |
+  | `filled` / `executed` | 0 | 99 |
+  | `broker_working` / `broker_working` | 22 | 22 |
+  | `broker_cancelled` / `broker_cancelled` | 300 | 300 |
+  | `placement_failed`, `placement_abandoned`, `placement_preparing` | 36, 2, 1 | 36, 2, 1 |
+  | distinct symbols in the active set | 76 | 22 |
+
+  All 99 were settled from `broker_working` by the startup backfill at 18:47:48Z. The 22 resting stops were not touched.
+- **Lifecycle 160 is still open.** It is COP:xnys, `placement_preparing` since 2026-08-21 with no broker order id, and it was never reconciled. Age proves nothing: the sweep may have been interrupted after the order was sent. `abandon_protective_stop_preparation` records that a Saxo lookup found nothing, so only `resolve_stale_protective_stop_preparations` may call it. That runs on the operator batch and on manual placement. COP also holds a real resting stop, so 160 blocks nothing today.
+- **Two lifecycle gaps found, not fixed here:**
+  - A stop that broker sync sees `Cancelled`, `Expired` or `Rejected` gets a terminal `execution_orders` status, but its lifecycle row stays `broker_working`. Only the app's own cancel paths call `release_protective_stop_lifecycle_test`. There are no such rows today.
+  - `update_protective_stop_lifecycle_test` reads the stored JSON columns with `json_text`. That returns an empty string for a decoded object, so each status update overwrites the columns it is not setting with `{}`. Live: `placement_result_json` is `{}` on all 121 placed stops and all 300 cancelled ones, and the 36 failed placements lost their cancellation and reconciliation documents.
+- **Tests.** One in `saxo_order`: a stop's final fill settles its lifecycle row, keeps the earlier reconciliation, leaves another symbol's working stop alone, and a replay settles nothing. One in `state`: the backfill frees a re-bought symbol for `protective_stop_batch_targets`, leaves working, cancelled and stale-preparing rows unchanged, and a second run settles nothing.
