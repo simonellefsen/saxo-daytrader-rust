@@ -7135,7 +7135,7 @@ impl AppState {
         .context("creating missed-trade shadow tracking index")?;
         self.backfill_trading_manager_strategy_type().await?;
         self.backfill_realised_gain_currency_split().await?;
-        self.backfill_filled_protective_stop_lifecycle_tests()
+        self.backfill_terminal_protective_stop_lifecycle_tests()
             .await?;
         self.tune_append_heavy_table_autovacuum().await?;
         Ok(())
@@ -12402,9 +12402,10 @@ market_data:
     /// Live on 2026-10-23, 99 lifecycle tests stayed `broker_working` after
     /// their stop filled. The coverage audit already reported such a symbol as
     /// unprotected once re-bought, but the operator batch skipped it as
-    /// "a protective stop already exists".
+    /// "a protective stop already exists". A stop cancelled outside the
+    /// runtime, or expired, stayed active the same way.
     #[tokio::test]
-    async fn filled_stop_backfill_makes_a_rebought_symbol_eligible_for_the_batch() {
+    async fn terminal_stop_backfill_makes_a_rebought_symbol_eligible_for_the_batch() {
         let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;
         for ddl in [
             "CREATE TABLE protective_stop_lifecycle_tests (
@@ -12478,7 +12479,11 @@ market_data:
                 (3, '{old}', '{old}', 3, 'sim', 'AMD:xnas', 7, 448.78, 'placement_preparing', NULL,
                  'stop-test:3:1', 'r3', '{{}}', '{{}}', '{{}}'),
                 (4, '{old}', '{old}', 4, 'sim', 'BAC:xnys', 58, 59.67, 'broker_cancelled', '5004',
-                 'stop-test:4:1', 'r4', '{{}}', '{{}}', '{{}}')"
+                 'stop-test:4:1', 'r4', '{{}}', '{{}}', '{{}}'),
+                (5, '{old}', '{old}', 5, 'sim', 'MSFT:xnas', 4, 400.0, 'broker_working', '5005',
+                 'stop-test:5:1', 'r5', '{{}}', '{{}}', '{{}}'),
+                (6, '{old}', '{old}', 6, 'sim', 'NVDA:xnas', 9, 150.0, 'broker_working', '5006',
+                 'stop-test:6:1', 'r6', '{{}}', '{{}}', '{{}}')"
         ))
         .execute(&state.pool)
         .await
@@ -12489,7 +12494,9 @@ market_data:
                  broker_order_id, strategy_type) VALUES
                 (1, '{old}', 'COP:xnys', 'SELL', 'stop', 'executed', 10, 128.06, '5001', 'protective_stop'),
                 (2, '{old}', 'V:xnys', 'SELL', 'stop', 'broker_working', 13, 340.84, '5002', 'protective_stop'),
-                (4, '{old}', 'BAC:xnys', 'SELL', 'stop', 'broker_cancelled', 58, 59.67, '5004', 'protective_stop')"
+                (4, '{old}', 'BAC:xnys', 'SELL', 'stop', 'broker_cancelled', 58, 59.67, '5004', 'protective_stop'),
+                (5, '{old}', 'MSFT:xnas', 'SELL', 'stop', 'broker_cancelled', 4, 400.0, '5005', 'protective_stop'),
+                (6, '{old}', 'NVDA:xnas', 'SELL', 'stop', 'broker_expired', 9, 150.0, '5006', 'protective_stop')"
         ))
         .execute(&state.pool)
         .await
@@ -12531,10 +12538,10 @@ market_data:
         );
 
         let settled = state
-            .backfill_filled_protective_stop_lifecycle_tests()
+            .backfill_terminal_protective_stop_lifecycle_tests()
             .await
-            .expect("settle filled lifecycle tests");
-        assert_eq!(settled, 1);
+            .expect("settle terminal lifecycle tests");
+        assert_eq!(settled, 3);
 
         let rows = state
             .select_json(
@@ -12554,10 +12561,14 @@ market_data:
                 // Only a Saxo lookup can prove the broker never saw a stale
                 // preparation, and the backfill makes no broker call.
                 (3, "placement_preparing".to_string()),
+                // Released by this runtime's own cancellation; already settled.
                 (4, "broker_cancelled".to_string()),
+                // Cancelled at Saxo by someone else, and expired.
+                (5, "cancelled".to_string()),
+                (6, "failed".to_string()),
             ]
         );
-        for row in &rows[1..] {
+        for row in &rows[1..4] {
             assert_eq!(text_value(row, "updated_at"), old, "untouched row changed");
         }
 
@@ -12574,7 +12585,7 @@ market_data:
         );
 
         let repeat = state
-            .backfill_filled_protective_stop_lifecycle_tests()
+            .backfill_terminal_protective_stop_lifecycle_tests()
             .await
             .expect("re-run the backfill");
         assert_eq!(repeat, 0, "the backfill runs on every pod start");
@@ -12991,6 +13002,156 @@ market_data:
                 .prepare_protective_stop_lifecycle_test(999)
                 .await
                 .is_err()
+        );
+    }
+
+    /// Live on 2026-10-23 every placed stop's `placement_result_json` read
+    /// `{}`: each lifecycle update rewrote the documents it was not setting
+    /// from a decoded copy that came back empty.
+    #[tokio::test]
+    async fn lifecycle_updates_keep_the_documents_they_do_not_set() {
+        let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;
+        for ddl in [
+            "CREATE TABLE protective_stop_prechecks (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                stop_price_local REAL NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )",
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER NOT NULL,
+                environment TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                stop_price_local REAL NOT NULL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                placement_result_json TEXT NOT NULL,
+                cancellation_result_json TEXT NOT NULL,
+                reconciliation_json TEXT NOT NULL
+            )",
+            "INSERT INTO protective_stop_prechecks (
+                id, created_at, environment, symbol, quantity, stop_price_local, status, result_json
+             ) VALUES (1, '2026-10-23T13:40:00Z', 'sim', 'COP:xnys', 10, 124, 'precheck_ok', '{}')",
+        ] {
+            sqlx::query(ddl)
+                .execute(&state.pool)
+                .await
+                .expect("prepare lifecycle test fixture");
+        }
+        let id = value_i64(
+            &state
+                .prepare_protective_stop_lifecycle_test(1)
+                .await
+                .expect("prepare lifecycle test"),
+            "id",
+        );
+        let stored = || {
+            let pool = state.pool.clone();
+            async move {
+                let row = sqlx::query(
+                    "SELECT status, broker_order_id, placement_result_json,
+                            cancellation_result_json, reconciliation_json
+                     FROM protective_stop_lifecycle_tests WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read lifecycle test");
+                [
+                    "status",
+                    "broker_order_id",
+                    "placement_result_json",
+                    "cancellation_result_json",
+                    "reconciliation_json",
+                ]
+                .map(|column| {
+                    row.try_get::<Option<String>, _>(column)
+                        .expect("lifecycle column")
+                        .unwrap_or_default()
+                })
+            }
+        };
+        let [
+            _,
+            _,
+            prepared_placement,
+            not_requested_cancellation,
+            not_requested_reconciliation,
+        ] = stored().await;
+        assert!(prepared_placement.contains("not_sent"));
+
+        let placement = json!({"accepted": true, "broker_order_id": "5100", "request_id": "r"});
+        state
+            .record_protective_stop_lifecycle_placement(
+                id,
+                "placement_submitted",
+                Some("5100"),
+                &placement,
+            )
+            .await
+            .expect("record placement");
+        assert_eq!(
+            stored().await,
+            [
+                "placement_submitted".to_string(),
+                "5100".to_string(),
+                placement.to_string(),
+                not_requested_cancellation.clone(),
+                not_requested_reconciliation.clone(),
+            ]
+        );
+
+        // The confirmation step passes no broker order id of its own; the one
+        // the placement recorded must survive along with the placement result.
+        let reconciliation = json!({"status": "broker_working", "broker_status": "Working"});
+        state
+            .record_protective_stop_lifecycle_reconciliation(
+                id,
+                "broker_working",
+                None,
+                &reconciliation,
+            )
+            .await
+            .expect("record reconciliation");
+        assert_eq!(
+            stored().await,
+            [
+                "broker_working".to_string(),
+                "5100".to_string(),
+                placement.to_string(),
+                not_requested_cancellation.clone(),
+                reconciliation.to_string(),
+            ]
+        );
+
+        let cancellation = json!({"accepted": true});
+        state
+            .record_protective_stop_lifecycle_cancellation(
+                id,
+                "cancellation_submitted",
+                &cancellation,
+            )
+            .await
+            .expect("record cancellation");
+        assert_eq!(
+            stored().await,
+            [
+                "cancellation_submitted".to_string(),
+                "5100".to_string(),
+                placement.to_string(),
+                cancellation.to_string(),
+                reconciliation.to_string(),
+            ]
         );
     }
 

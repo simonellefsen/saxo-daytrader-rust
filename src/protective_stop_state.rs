@@ -21,13 +21,30 @@ use tracing::info;
 
 const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
 
-/// Lifecycle statuses that can still stand for a live broker order. A broker
-/// final fill settles any of them to `filled`, the status the manual reconcile
-/// already records for a FinalFill. `filled` is deliberately absent from
-/// `symbols_with_active_protective_stops`, the
-/// `idx_protective_stop_lifecycle_tests_active_source` guard, and adoption.
-const FILL_SETTLEABLE_LIFECYCLE_STATUSES: &str = "'placement_submitted', 'broker_working', \
+/// Lifecycle statuses that can still stand for a live broker order. Once broker
+/// sync records a terminal state for the stop's execution order, any of them is
+/// settled by `settled_lifecycle_status`.
+const SETTLEABLE_LIFECYCLE_STATUSES: &str = "'placement_submitted', 'broker_working', \
      'broker_state_unknown', 'broker_amended', 'cancellation_submitted', 'reconciliation_pending'";
+
+/// Execution-order statuses broker sync writes for a terminal broker state.
+const TERMINAL_EXECUTION_ORDER_STATUSES: &str = "'executed', 'broker_cancelled', 'broker_expired', \
+     'broker_done_for_day', 'execution_failed'";
+
+/// The lifecycle status for a stop whose execution order reached a terminal
+/// state, using the vocabulary the manual reconcile already records for the
+/// same broker states: `filled`, `cancelled`, and `failed` for every other
+/// terminal state. None of the three appears in
+/// `symbols_with_active_protective_stops`, the
+/// `idx_protective_stop_lifecycle_tests_active_source` guard, or adoption.
+fn settled_lifecycle_status(execution_order_status: &str) -> Option<&'static str> {
+    match execution_order_status {
+        "executed" => Some("filled"),
+        "broker_cancelled" => Some("cancelled"),
+        "broker_expired" | "broker_done_for_day" | "execution_failed" => Some("failed"),
+        _ => None,
+    }
+}
 
 /// A protective stop level derived from stored daily indicators.
 ///
@@ -565,27 +582,35 @@ impl AppState {
         Ok(())
     }
 
-    /// Settles the lifecycle-test row behind a protective stop that Saxo
-    /// reported finally filled, once broker sync has marked its execution order
-    /// `executed`.
+    /// Settles the lifecycle-test row behind a protective stop once broker sync
+    /// has recorded a terminal state for its execution order: a final fill, or a
+    /// cancellation, expiry or rejection Saxo reported.
     ///
-    /// The fill counterpart of `release_protective_stop_lifecycle_test`. Until
-    /// 2026-10-23 nothing wrote it, so every stop that ever filled stayed
+    /// The broker-observed counterpart of `release_protective_stop_lifecycle_test`,
+    /// which covers only the cancellations this runtime makes itself. Until
+    /// 2026-10-23 nothing else wrote it, so every stop that ever filled stayed
     /// `broker_working` here -- 99 rows live -- and a symbol stopped out once
     /// and later re-bought was skipped by the operator batch forever, because
-    /// `symbols_with_active_protective_stops` reads this table.
+    /// `symbols_with_active_protective_stops` reads this table. A stop
+    /// cancelled outside the runtime, or expired, had the same fate.
     ///
-    /// Bookkeeping only, with no broker call. Keyed on `broker_order_id`, so a
-    /// fill that is not a protective stop matches nothing. Each update is
-    /// conditional on the status it read, so a concurrent writer is never
-    /// overwritten, and a replay matches no row. Returns the rows settled.
-    pub async fn record_protective_stop_lifecycle_fill(
+    /// Bookkeeping only, with no broker call. Keyed on `broker_order_id`, so an
+    /// order that is not a protective stop matches nothing, and a status that is
+    /// not terminal settles nothing. Each update is conditional on the status it
+    /// read, so a concurrent writer is never overwritten, and a replay matches
+    /// no row. Returns the rows settled.
+    pub async fn settle_protective_stop_lifecycle_test(
         &self,
         broker_order_id: &str,
         execution_order_id: i64,
+        execution_order_status: &str,
+        broker_status: Option<&str>,
         source: &str,
     ) -> Result<u64> {
         let broker_order_id = broker_order_id.trim();
+        let Some(status) = settled_lifecycle_status(execution_order_status) else {
+            return Ok(0);
+        };
         if broker_order_id.is_empty() {
             return Ok(0);
         }
@@ -594,7 +619,7 @@ impl AppState {
                 "SELECT id, status, reconciliation_json
                  FROM protective_stop_lifecycle_tests
                  WHERE broker_order_id = '{}'
-                   AND status IN ({FILL_SETTLEABLE_LIFECYCLE_STATUSES})
+                   AND status IN ({SETTLEABLE_LIFECYCLE_STATUSES})
                  ORDER BY id ASC",
                 sql_escape(broker_order_id)
             ))
@@ -604,69 +629,75 @@ impl AppState {
         for row in &rows {
             let previous_status = text_value(row, "status");
             let reconciliation = json!({
-                "status": "filled",
+                "status": status,
                 "source": source,
                 "settled_at": now,
                 "broker_order_id": broker_order_id,
+                "broker_status": broker_status,
                 "execution_order_id": execution_order_id,
+                "execution_order_status": execution_order_status,
                 "previous_status": previous_status,
                 "previous_reconciliation": row.get("reconciliation_json").cloned().unwrap_or(JsonValue::Null),
-                "safety": "local_bookkeeping_after_broker_sync_recorded_the_final_fill_no_broker_call"
+                "safety": "local_bookkeeping_after_broker_sync_recorded_a_terminal_state_no_broker_call"
             });
             let updated = sqlx::query(
                 "UPDATE protective_stop_lifecycle_tests
-                 SET updated_at = $1, status = 'filled', reconciliation_json = $2
-                 WHERE id = $3 AND status = $4",
+                 SET updated_at = $1, status = $2, reconciliation_json = $3
+                 WHERE id = $4 AND status = $5",
             )
             .bind(&now)
+            .bind(status)
             .bind(reconciliation.to_string())
             .bind(value_i64(row, "id"))
             .bind(&previous_status)
             .execute(&self.pool)
             .await
-            .context("settling filled protective-stop lifecycle test")?;
+            .context("settling protective-stop lifecycle test after a terminal broker state")?;
             settled += updated.rows_affected();
         }
         Ok(settled)
     }
 
-    /// Startup backfill for `record_protective_stop_lifecycle_fill`: settles
-    /// every lifecycle row whose execution order broker sync already marked
-    /// `executed`. Idempotent, so every pod can run it on every start.
+    /// Startup backfill for `settle_protective_stop_lifecycle_test`: settles
+    /// every lifecycle row whose execution order broker sync already moved to a
+    /// terminal status. Idempotent, so every pod can run it on every start.
     ///
     /// A `placement_preparing` row with no broker order id is deliberately left
     /// alone. Only a Saxo lookup can prove the broker never saw it, and
     /// `abandon_protective_stop_preparation` records that such a lookup found
     /// nothing; this backfill makes no broker call, so it cannot make that
     /// claim. `resolve_stale_protective_stop_preparations` does the lookup.
-    pub(crate) async fn backfill_filled_protective_stop_lifecycle_tests(&self) -> Result<u64> {
+    pub(crate) async fn backfill_terminal_protective_stop_lifecycle_tests(&self) -> Result<u64> {
         let rows = self
             .select_json(&format!(
-                "SELECT t.broker_order_id, o.id AS execution_order_id
+                "SELECT t.broker_order_id, o.id AS execution_order_id,
+                        o.status AS execution_order_status
                  FROM protective_stop_lifecycle_tests t
                  JOIN execution_orders o ON o.broker_order_id = t.broker_order_id
-                 WHERE t.status IN ({FILL_SETTLEABLE_LIFECYCLE_STATUSES})
+                 WHERE t.status IN ({SETTLEABLE_LIFECYCLE_STATUSES})
                    AND t.broker_order_id IS NOT NULL
                    AND t.broker_order_id <> ''
-                   AND o.status = 'executed'
+                   AND o.status IN ({TERMINAL_EXECUTION_ORDER_STATUSES})
                  ORDER BY t.id ASC"
             ))
             .await
-            .context("loading filled protective stops whose lifecycle tests are unsettled")?;
+            .context("loading terminal protective stops whose lifecycle tests are unsettled")?;
         let mut settled = 0;
         for row in &rows {
             settled += self
-                .record_protective_stop_lifecycle_fill(
+                .settle_protective_stop_lifecycle_test(
                     &text_value(row, "broker_order_id"),
                     value_i64(row, "execution_order_id"),
-                    "startup_backfill_of_fills_recorded_before_lifecycle_settlement",
+                    &text_value(row, "execution_order_status"),
+                    None,
+                    "startup_backfill_of_terminal_states_recorded_before_lifecycle_settlement",
                 )
                 .await?;
         }
         if settled > 0 {
             info!(
                 rows = settled,
-                "settled lifecycle tests of protective stops that had already filled"
+                "settled lifecycle tests of protective stops already terminal at the broker"
             );
         }
         Ok(settled)
@@ -958,6 +989,16 @@ impl AppState {
         .await
     }
 
+    /// Writes a lifecycle test's new status and whichever documents the caller
+    /// supplies. A column the caller leaves as `None` is not rewritten.
+    ///
+    /// Until 2026-10-23 this read the stored documents back with `json_text`,
+    /// which yields an empty string for any `_json` column `row_to_json` has
+    /// already decoded into an object, and wrote `{}` in its place. Every update
+    /// therefore erased the documents it was not setting: live, all 421 placed
+    /// stops had lost their placement result, and every failed placement its
+    /// cancellation and reconciliation documents. `COALESCE` keeps the stored
+    /// text exactly as written instead of round-tripping it through Rust.
     async fn update_protective_stop_lifecycle_test(
         &self,
         test_id: i64,
@@ -967,50 +1008,28 @@ impl AppState {
         cancellation: Option<&JsonValue>,
         reconciliation: Option<&JsonValue>,
     ) -> Result<()> {
-        let current = self
-            .protective_stop_lifecycle_test(test_id)
+        self.protective_stop_lifecycle_test(test_id)
             .await?
             .ok_or_else(|| anyhow!("Protective-stop lifecycle test {test_id} was not found"))?;
-        let broker_order_id = broker_order_id.map(ToString::to_string).or_else(|| {
-            let value = json_text(&current, "broker_order_id");
-            (!value.is_empty()).then_some(value)
-        });
-        let placement_text = placement.map(ToString::to_string).unwrap_or_else(|| {
-            let value = json_text(&current, "placement_result_json");
-            if value.is_empty() {
-                "{}".to_string()
-            } else {
-                value
-            }
-        });
-        let cancellation_text = cancellation.map(ToString::to_string).unwrap_or_else(|| {
-            let value = json_text(&current, "cancellation_result_json");
-            if value.is_empty() {
-                "{}".to_string()
-            } else {
-                value
-            }
-        });
-        let reconciliation_text = reconciliation.map(ToString::to_string).unwrap_or_else(|| {
-            let value = json_text(&current, "reconciliation_json");
-            if value.is_empty() {
-                "{}".to_string()
-            } else {
-                value
-            }
-        });
+        let broker_order_id = broker_order_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
         let updated = sqlx::query(
             "UPDATE protective_stop_lifecycle_tests
-             SET updated_at = $1, status = $2, broker_order_id = $3, placement_result_json = $4,
-                 cancellation_result_json = $5, reconciliation_json = $6
+             SET updated_at = $1, status = $2,
+                 broker_order_id = COALESCE($3, broker_order_id),
+                 placement_result_json = COALESCE($4, placement_result_json),
+                 cancellation_result_json = COALESCE($5, cancellation_result_json),
+                 reconciliation_json = COALESCE($6, reconciliation_json)
              WHERE id = $7",
         )
         .bind(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
         .bind(status)
         .bind(broker_order_id)
-        .bind(placement_text)
-        .bind(cancellation_text)
-        .bind(reconciliation_text)
+        .bind(placement.map(ToString::to_string))
+        .bind(cancellation.map(ToString::to_string))
+        .bind(reconciliation.map(ToString::to_string))
         .bind(test_id)
         .execute(&self.pool)
         .await

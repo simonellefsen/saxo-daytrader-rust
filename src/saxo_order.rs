@@ -1414,11 +1414,20 @@ async fn sync_one_broker_order(
                 classify_execution_error(&status, &broker_failure_detail(broker_payload)),
             );
         }
-        update_order_broker_status(state, order, status, &enriched_state, None).await?;
+        let lifecycle_tests_settled = record_terminal_broker_status(
+            state,
+            order,
+            &broker_order_id,
+            status,
+            &enriched_state,
+            None,
+        )
+        .await?;
         return Ok(json!({
             "status": status,
             "updated": true,
             "fills": 0,
+            "lifecycle_tests_settled": lifecycle_tests_settled,
             "order_id": order_id,
             "symbol": symbol,
             "broker_order_id": broker_order_id,
@@ -2640,25 +2649,15 @@ async fn sync_final_fill(
         .execute(&state.pool)
         .await?;
     }
-    update_order_broker_status(state, order, "executed", broker_state, ledger_id).await?;
-    // A filled protective stop has to leave the lifecycle table's active set
-    // too, or the operator batch skips the symbol for good once it is
-    // re-bought. The fill above is already durable, so a failure here is
-    // logged rather than reported as a failed sync; the startup backfill
-    // settles anything it leaves behind.
-    let lifecycle_tests_settled = match state
-        .record_protective_stop_lifecycle_fill(broker_order_id, order_id, "broker_order_sync")
-        .await
-    {
-        Ok(settled) => settled,
-        Err(err) => {
-            warn!(
-                order_id,
-                broker_order_id, "could not settle the filled stop's lifecycle test: {err:#}"
-            );
-            0
-        }
-    };
+    let lifecycle_tests_settled = record_terminal_broker_status(
+        state,
+        order,
+        broker_order_id,
+        "executed",
+        broker_state,
+        ledger_id,
+    )
+    .await?;
     Ok(json!({
         "status": "executed",
         "updated": true,
@@ -2673,6 +2672,49 @@ async fn sync_final_fill(
         "average_price_local": average_price_local,
         "ledger_id": ledger_id
     }))
+}
+
+/// Writes a terminal status broker sync observed -- a final fill, or a
+/// cancellation, expiry or rejection -- and settles the protective-stop
+/// lifecycle test behind the same broker order, if there is one.
+///
+/// Without the second step a finished stop's lifecycle row stays active, and
+/// the operator batch skips the symbol for good once it is re-bought. The
+/// order's status is already durable when the settlement runs, so a failure
+/// there is logged rather than reported as a failed sync; the startup backfill
+/// settles anything it leaves behind. Returns the lifecycle rows settled.
+async fn record_terminal_broker_status(
+    state: &AppState,
+    order: &JsonValue,
+    broker_order_id: &str,
+    status: &str,
+    broker_state: &JsonValue,
+    ledger_id: Option<i64>,
+) -> Result<u64> {
+    update_order_broker_status(state, order, status, broker_state, ledger_id).await?;
+    let order_id = value_i64(order, "id");
+    let broker_status = broker_status_text(broker_payload(broker_state));
+    match state
+        .settle_protective_stop_lifecycle_test(
+            broker_order_id,
+            order_id,
+            status,
+            broker_status.as_deref(),
+            "broker_order_sync",
+        )
+        .await
+    {
+        Ok(settled) => Ok(settled),
+        Err(err) => {
+            warn!(
+                order_id,
+                broker_order_id,
+                status,
+                "could not settle the protective stop's lifecycle test: {err:#}"
+            );
+            Ok(0)
+        }
+    }
 }
 
 async fn synced_fill_quantity(state: &AppState, order_id: i64) -> Result<f64> {
@@ -6881,6 +6923,159 @@ mod tests {
                 .try_get::<String, _>("reconciliation_json")
                 .unwrap(),
             filled.try_get::<String, _>("reconciliation_json").unwrap()
+        );
+    }
+
+    /// A stop Saxo reported cancelled outside this runtime, expired or rejected
+    /// left its lifecycle test `broker_working` exactly as a fill did, so the
+    /// symbol stayed in `symbols_with_active_protective_stops`.
+    #[tokio::test]
+    async fn a_stop_the_broker_ended_without_a_fill_leaves_the_active_lifecycle_set_without_http() {
+        let state = execution_order_test_state().await;
+        // (id, symbol, broker order id, Saxo status, settled lifecycle status)
+        let cases = [
+            (1, "COP:xnys", "5040000011", "Cancelled", "cancelled"),
+            (2, "NVDA:xnas", "5040000012", "Expired", "failed"),
+            (3, "AMD:xnas", "5040000013", "Rejected", "failed"),
+            (4, "BAC:xnys", "5040000014", "DoneForDay", "failed"),
+        ];
+        let placed_at = "2026-10-01T13:40:00Z";
+        for (id, symbol, broker_order_id, _, _) in
+            cases
+                .iter()
+                .copied()
+                .chain([(5, "V:xnys", "5040000015", "Working", "broker_working")])
+        {
+            sqlx::query(&format!(
+                "INSERT INTO execution_orders (
+                    id, status, broker_order_id, execution_result_json, currency,
+                    action, symbol, mode, adapter, quantity, strategy_type
+                ) VALUES ({id}, 'broker_working', '{broker_order_id}', '{{}}', 'USD',
+                          'SELL', '{symbol}', 'live', 'saxo', 10, 'protective_stop')"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed adopted protective stop");
+            sqlx::query(&format!(
+                "INSERT INTO protective_stop_lifecycle_tests
+                    (id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                     stop_price_local, status, broker_order_id, external_reference, request_id,
+                     placement_result_json, cancellation_result_json, reconciliation_json) VALUES
+                    ({id}, '{placed_at}', '{placed_at}', {id}, 'sim', '{symbol}', 10, 100.0,
+                     'broker_working', '{broker_order_id}', 'stop-test:{id}:1', 'r{id}',
+                     '{{}}', '{{}}', '{{\"status\":\"broker_working\"}}')"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed working lifecycle test");
+        }
+
+        for (id, symbol, broker_order_id, saxo_status, _) in cases {
+            // The same classification `sync_one_broker_order` applies to the
+            // payload it fetched; from here on no session or HTTP is involved.
+            let broker_status = Some(saxo_status.to_string());
+            assert!(is_terminal_failure_status(&broker_status));
+            let status = local_terminal_status(&broker_status);
+            let order = json!({
+                "id": id,
+                "symbol": symbol,
+                "action": "SELL",
+                "mode": "live",
+                "status": "broker_working",
+                "quantity": 10.0,
+                "currency": "USD",
+                "strategy_type": "protective_stop",
+                "execution_result_json": {}
+            });
+            let broker_state = json!({
+                "source": "test_fixture",
+                "broker_payload": {"Status": saxo_status}
+            });
+            let settled = record_terminal_broker_status(
+                &state,
+                &order,
+                broker_order_id,
+                status,
+                &broker_state,
+                None,
+            )
+            .await
+            .expect("record terminal broker status");
+            assert_eq!(settled, 1, "{saxo_status} settles its lifecycle test");
+            // Broker sync can observe the same terminal state again.
+            let replay = record_terminal_broker_status(
+                &state,
+                &order,
+                broker_order_id,
+                status,
+                &broker_state,
+                None,
+            )
+            .await
+            .expect("replay terminal broker status");
+            assert_eq!(replay, 0, "{saxo_status} replay settles nothing");
+        }
+
+        let rows = sqlx::query(
+            "SELECT t.id, t.status, t.updated_at, t.reconciliation_json, o.status AS order_status
+             FROM protective_stop_lifecycle_tests t
+             JOIN execution_orders o ON o.broker_order_id = t.broker_order_id
+             ORDER BY t.id",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read lifecycle tests");
+        let statuses = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.try_get::<i64, _>("id").unwrap(),
+                    row.try_get::<String, _>("status").unwrap(),
+                    row.try_get::<String, _>("order_status").unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                (1, "cancelled".to_string(), "broker_cancelled".to_string()),
+                (2, "failed".to_string(), "broker_expired".to_string()),
+                (3, "failed".to_string(), "execution_failed".to_string()),
+                (4, "failed".to_string(), "broker_done_for_day".to_string()),
+                (
+                    5,
+                    "broker_working".to_string(),
+                    "broker_working".to_string()
+                ),
+            ]
+        );
+        let reconciliation: JsonValue = serde_json::from_str(
+            &rows[0]
+                .try_get::<String, _>("reconciliation_json")
+                .expect("settled reconciliation"),
+        )
+        .expect("parse settled reconciliation");
+        assert_eq!(reconciliation["broker_status"], json!("Cancelled"));
+        assert_eq!(
+            reconciliation["execution_order_status"],
+            json!("broker_cancelled")
+        );
+        assert_eq!(reconciliation["previous_status"], json!("broker_working"));
+        assert_eq!(
+            reconciliation["previous_reconciliation"]["status"],
+            json!("broker_working")
+        );
+        assert_eq!(
+            rows[4].try_get::<String, _>("updated_at").unwrap(),
+            placed_at,
+            "the resting stop's lifecycle test must not be touched"
+        );
+        assert_eq!(
+            state
+                .symbols_with_active_protective_stops()
+                .await
+                .expect("read active stops"),
+            vec!["V:XNYS".to_string()]
         );
     }
 
