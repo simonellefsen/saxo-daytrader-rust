@@ -3444,3 +3444,22 @@ broker mutation was added.
   - one in `trading_manager` on the cap and open price;
   - two in `saxo_order`: the holding by instrument, including the ambiguous and wrong-type cases, and stop release plus reservations across spellings;
   - one in `saxo_portfolio` on the divergence pairing.
+
+## [2026-10-23] Protective stops | Every terminal stop settles its lifecycle test, and updates keep their documents
+
+Closes the two gaps recorded in the filled-stop entry above (`b18cc8a`).
+
+- **Stops the broker ended without a fill.** Broker sync now writes every terminal status through `saxo_order::record_terminal_broker_status`, which settles the lifecycle test with the same `broker_order_id`.
+  - Mapping: `executed` → `filled`, `broker_cancelled` → `cancelled`, and `broker_expired`, `broker_done_for_day` or `execution_failed` → `failed`. That is the vocabulary the manual reconcile already writes for the same Saxo states. None of the three is in an active-status list, the active-source unique index or adoption.
+  - The runtime's own cancellations still end as `broker_cancelled`, through `release_protective_stop_lifecycle_test`.
+  - `execution_failed` is safe to read as broker-terminal here. For an adopted stop, only broker sync can write it: every other writer is in the queue's placement path, and adopted stops start at `broker_working`.
+  - The startup backfill now covers every terminal status. No live row needed it: no adopted stop has yet been cancelled outside the runtime, expired or been rejected.
+- **Documents erased on update.** `update_protective_stop_lifecycle_test` rebuilt each document it was not setting from `json_text`. That returns an empty string for a `_json` column `row_to_json` has already decoded, so every status update wrote `{}` over them. The update now leaves those columns alone with `COALESCE`.
+  - Measured live: `placement_result_json` is `{}` on all 421 placed stops (300 `broker_cancelled`, 99 `filled`, 22 `broker_working`). `cancellation_result_json` is `{}` on the 121 that were never cancelled by the runtime. All 36 failed placements lost their cancellation and reconciliation documents.
+  - **The erased documents cannot be recovered.** The broker order id and request id survive on the row, and adopted stops carry the request id in `execution_orders.request_json`.
+- **Live, read-only, before → after deploy:** every count is unchanged, as expected. Lifecycle by execution order: 300 `broker_cancelled`, 99 `filled`/`executed`, 22 `broker_working`, 36 `placement_failed`, 2 `placement_abandoned`, 1 `placement_preparing` (lifecycle 160). 22 symbols are in the active set. No settle or persist error appeared in the new pods' logs.
+- **Still to confirm live:** the first stop placed after the deploy should keep its `placement_result_json` once confirmed `broker_working`. This needs a new placement; nothing was placed to test it.
+- **Tests.**
+  - `saxo_order`: `Cancelled`, `Expired`, `Rejected` and `DoneForDay` each settle their stop, a replay settles nothing, and another symbol's working stop is untouched.
+  - `state`: the backfill also settles a stop cancelled at Saxo and an expired one.
+  - `state`: a stop driven through prepare, placement, reconciliation and cancellation keeps every document it is not given.
