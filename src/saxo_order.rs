@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_at, yaml_bool, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
+    instrument_identity::{InstrumentIdentity, SymbolAliases, symbol_aliases},
     saxo_error::classify_execution_error,
     saxo_portfolio::refresh_broker_snapshots,
     state::{AppState, PROTECTIVE_STOP_STRATEGY_TYPE},
@@ -1611,14 +1612,25 @@ async fn execute_order(
         }
     }
 
-    if action == "SELL" {
+    // Saxo holds a share class under its compact symbol (`ALKb:xcse`) while the
+    // order names it the system's way (`ALK-B:xcse`). Every SELL-side lookup
+    // below -- the stop release, the holding, the reservations -- is made over
+    // all symbols naming the order's instrument, so they agree on one holding.
+    let sell_aliases = if action == "SELL" {
+        Some(symbol_aliases(state, &symbol).await)
+    } else {
+        None
+    };
+    if let Some(aliases) = &sell_aliases {
         // Saxo permits one resting sell per owned holding, so a protective stop
         // on this symbol will make the exit fail with
         // `SellOrdersAlreadyExistForOwnedContracts`. Standing protection must
         // yield to a decided exit: cancel the stop first and confirm at the
         // broker that it is gone before the sell is built. Nothing else in the
         // runtime cancels a protective stop automatically.
-        if let Err(err) = cancel_protective_stops_before_sell(state, session, &symbol).await {
+        if let Err(err) =
+            cancel_protective_stops_before_sell(state, session, &symbol, aliases).await
+        {
             return fail_order(
                 state,
                 order_id,
@@ -1640,11 +1652,11 @@ async fn execute_order(
         // Python/Node systems often trust their latest cached row, while broker APIs can
         // already have a later fill that changed the holding.
         let local_snapshot_quantity = latest_position_quantity(state, &symbol).await?;
-        let broker_position = broker_position_for_symbol(&broker_positions, &symbol);
+        let broker_position = broker_position_for_order(broker_positions, &symbol, aliases);
         let held_quantity = broker_position
             .map(|position| position.quantity.max(0.0))
             .unwrap_or(0.0);
-        let reserved_quantity = active_sell_reservations(state, &symbol, order_id).await?;
+        let reserved_quantity = active_sell_reservations(state, aliases, order_id).await?;
         let available = (held_quantity - reserved_quantity).max(0.0);
         if available + 1e-9 < quantity {
             let error_text = format!(
@@ -1675,11 +1687,9 @@ async fn execute_order(
         }
     }
 
-    let closing_position = if action == "SELL" {
-        broker_position_for_symbol(&broker_positions, &symbol)
-    } else {
-        None
-    };
+    let closing_position = sell_aliases
+        .as_ref()
+        .and_then(|aliases| broker_position_for_order(broker_positions, &symbol, aliases));
     let request_payload =
         match build_order_payload(state, session, order, quantity, closing_position).await {
             Ok(payload) => payload,
@@ -3517,7 +3527,7 @@ pub(crate) async fn cancel_protective_stop_for_replacement(
 ///
 /// This is the only automatic broker mutation the protective-stop machinery
 /// performs, and it is deliberately narrow: it cancels rows this runtime marked
-/// `protective_stop` on exactly the symbol being sold, and it will not report
+/// `protective_stop` on exactly the instrument being sold, and it will not report
 /// success until Saxo confirms the stop is no longer working. A cancel that
 /// Saxo accepted but has not yet applied is treated as a failure, because
 /// proceeding would submit a sell the broker rejects and burn the exit.
@@ -3525,29 +3535,9 @@ async fn cancel_protective_stops_before_sell(
     state: &AppState,
     session: &JsonValue,
     symbol: &str,
+    aliases: &SymbolAliases,
 ) -> Result<Vec<JsonValue>> {
-    let statuses = BROKER_SYNC_STATUSES
-        .iter()
-        .chain(["broker_state_unknown"].iter())
-        .map(|status| format!("'{}'", sql_escape(status)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let rows = sqlx::query(&format!(
-        "SELECT * FROM execution_orders
-         WHERE UPPER(symbol) = UPPER('{}')
-           AND action = 'SELL'
-           AND COALESCE(strategy_type, '') = '{}'
-           AND status IN ({statuses})
-           AND broker_order_id IS NOT NULL
-           AND broker_order_id <> ''
-         ORDER BY id ASC
-         LIMIT 10",
-        sql_escape(symbol),
-        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
-    ))
-    .fetch_all(&state.pool)
-    .await
-    .context("loading resting protective stops before a sell")?;
+    let rows = protective_stops_to_release(state, aliases).await?;
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -3555,7 +3545,7 @@ async fn cancel_protective_stops_before_sell(
     let client_key = client_key(state, session)?;
     let account_key = account_key(state, session)?;
     let mut cancelled = Vec::new();
-    for row in rows.iter().map(row_to_json) {
+    for row in rows {
         let order_id = value_i64(&row, "id");
         let broker_order_id = order_text(&row, "broker_order_id");
         saxo_delete_json(
@@ -3632,9 +3622,41 @@ async fn cancel_protective_stops_before_sell(
     Ok(cancelled)
 }
 
+/// The resting protective stops a SELL must clear first. A stop is recorded
+/// under the broker's symbol, so a SELL named the system's way finds it only
+/// through the instrument.
+async fn protective_stops_to_release(
+    state: &AppState,
+    aliases: &SymbolAliases,
+) -> Result<Vec<JsonValue>> {
+    let statuses = BROKER_SYNC_STATUSES
+        .iter()
+        .chain(["broker_state_unknown"].iter())
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = sqlx::query(&format!(
+        "SELECT * FROM execution_orders
+         WHERE UPPER(symbol) IN ({})
+           AND action = 'SELL'
+           AND COALESCE(strategy_type, '') = '{}'
+           AND status IN ({statuses})
+           AND broker_order_id IS NOT NULL
+           AND broker_order_id <> ''
+         ORDER BY id ASC
+         LIMIT 10",
+        aliases.sql_list(),
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading resting protective stops before a sell")?;
+    Ok(rows.iter().map(row_to_json).collect())
+}
+
 async fn active_sell_reservations(
     state: &AppState,
-    symbol: &str,
+    aliases: &SymbolAliases,
     exclude_order_id: i64,
 ) -> Result<f64> {
     let statuses = ACTIVE_SELL_STATUSES
@@ -3651,12 +3673,12 @@ async fn active_sell_reservations(
     let row = sqlx::query(&format!(
         "SELECT COALESCE(SUM(quantity), 0) AS quantity
          FROM execution_orders
-         WHERE UPPER(symbol) = UPPER('{}')
+         WHERE UPPER(symbol) IN ({})
            AND action = 'SELL'
            AND id <> {}
            AND status IN ({})
            AND COALESCE(strategy_type, '') <> '{}'",
-        sql_escape(symbol),
+        aliases.sql_list(),
         exclude_order_id,
         statuses,
         sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
@@ -3685,6 +3707,32 @@ fn broker_position_for_symbol<'a>(
             .iter()
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(symbol))
             .map(|(_, position)| position)
+    })
+}
+
+/// The broker position a SELL closes. Saxo keys positions by its display
+/// symbol, so a share class ordered as `ALK-B:xcse` is found by instrument when
+/// the text does not match. Exactly one position may carry the instrument; two
+/// would mean this order cannot say which holding it closes.
+fn broker_position_for_order<'a>(
+    positions: &'a HashMap<String, BrokerPosition>,
+    symbol: &str,
+    aliases: &SymbolAliases,
+) -> Option<&'a BrokerPosition> {
+    broker_position_for_symbol(positions, symbol).or_else(|| {
+        let identity = aliases.identity.as_ref()?;
+        let mut matching = positions.values().filter(|position| {
+            position
+                .instrument
+                .as_ref()
+                .and_then(|instrument| {
+                    InstrumentIdentity::new(instrument.uic, &instrument.asset_type)
+                })
+                .as_ref()
+                == Some(identity)
+        });
+        let position = matching.next()?;
+        matching.next().is_none().then_some(position)
     })
 }
 
@@ -5260,7 +5308,7 @@ mod tests {
                 .expect("unknown placement must not be claimable")
         );
         assert_eq!(
-            active_sell_reservations(&state, "AMD:xnas", 2)
+            active_sell_reservations(&state, &symbol_aliases(&state, "AMD:xnas").await, 2)
                 .await
                 .expect("read active SELL reservation"),
             3.0
@@ -5279,7 +5327,7 @@ mod tests {
         .await
         .expect("seed resting protective stop");
         assert_eq!(
-            active_sell_reservations(&state, "AMD:xnas", 2)
+            active_sell_reservations(&state, &symbol_aliases(&state, "AMD:xnas").await, 2)
                 .await
                 .expect("read active SELL reservation with a stop resting"),
             3.0,
@@ -7629,5 +7677,82 @@ execution:
         assert!(summary.get("Symbol").is_none());
         assert!(summary.get("ClientName").is_none());
         assert!(summary.get("__next").is_none());
+    }
+
+    fn held(uic: i64, asset_type: &str, quantity: f64) -> BrokerPosition {
+        BrokerPosition {
+            quantity,
+            can_be_closed: true,
+            instrument: Some(SaxoInstrument {
+                uic,
+                asset_type: asset_type.to_string(),
+                exchange_id: "CSE".to_string(),
+                description: "test instrument".to_string(),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sell_named_the_system_way_closes_the_holding_saxo_names_compactly() {
+        let state = crate::instrument_identity::tests::share_class_state(&[]).await;
+        let aliases = symbol_aliases(&state, "ALK-B:xcse").await;
+        let mut positions = HashMap::from([("ALKb:xcse".to_string(), held(19782, "Stock", 28.0))]);
+        assert_eq!(
+            broker_position_for_order(&positions, "ALK-B:xcse", &aliases)
+                .map(|position| position.quantity),
+            Some(28.0),
+            "the guard read zero here and blocked the exit before precheck"
+        );
+        // The same uic in another asset type is a different instrument.
+        let other_type =
+            HashMap::from([("ALKb:xcse".to_string(), held(19782, "CfdOnStock", 28.0))]);
+        assert!(broker_position_for_order(&other_type, "ALK-B:xcse", &aliases).is_none());
+        // Two holdings carrying the instrument leave the order ambiguous.
+        positions.insert("ALK-B:xcse-dup".to_string(), held(19782, "Stock", 5.0));
+        assert!(broker_position_for_order(&positions, "ALK-B:xcse", &aliases).is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_release_and_reservations_follow_the_instrument_across_spellings() {
+        let state = crate::instrument_identity::tests::share_class_state(&[
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY, symbol TEXT, action TEXT, status TEXT,
+                strategy_type TEXT, quantity REAL, broker_order_id TEXT
+            )",
+            // The stop is recorded under the broker symbol; an earlier exit
+            // decision is still pending under the system symbol.
+            "INSERT INTO execution_orders
+                (id, symbol, action, status, strategy_type, quantity, broker_order_id) VALUES
+                (1, 'ALKb:xcse', 'SELL', 'broker_working', 'protective_stop', 28, '5300'),
+                (2, 'ALK-B:xcse', 'SELL', 'pending_execution', 'swing', 10, NULL),
+                (3, 'NOVO-B:xcse', 'SELL', 'pending_execution', 'swing', 4, NULL)",
+        ])
+        .await;
+        let system = symbol_aliases(&state, "ALK-B:xcse").await;
+        let stops = protective_stops_to_release(&state, &system)
+            .await
+            .expect("read stops to release");
+        assert_eq!(
+            stops
+                .iter()
+                .map(|row| value_i64(row, "id"))
+                .collect::<Vec<_>>(),
+            vec![1],
+            "the stop must be cleared first or Saxo rejects the exit"
+        );
+        let broker = symbol_aliases(&state, "ALKb:xcse").await;
+        assert_eq!(
+            active_sell_reservations(&state, &broker, 99)
+                .await
+                .expect("read reservations"),
+            10.0,
+            "a pending exit under the other spelling reserves the same shares"
+        );
+        assert_eq!(
+            active_sell_reservations(&state, &system, 2)
+                .await
+                .expect("read reservations excluding the order itself"),
+            0.0
+        );
     }
 }

@@ -9,6 +9,7 @@ use tracing::info;
 use crate::{
     config::yaml_string,
     db::{sql_escape, value_f64},
+    instrument_identity::{InstrumentBook, InstrumentIdentity},
     state::AppState,
 };
 
@@ -132,6 +133,18 @@ async fn local_broker_quantity_divergences(
     .fetch_all(&state.pool)
     .await
     .context("reading local position book for divergence check")?;
+    // The book records the system's symbol (`ALK-B:xcse`) and Saxo its compact
+    // one (`ALKb:xcse`), and Saxo's position rows carry no ISIN to join them.
+    // A local symbol naming the same instrument as a broker row is compared
+    // under the broker's symbol.
+    let book = InstrumentBook::load(state).await;
+    let broker_symbol_by_instrument: HashMap<InstrumentIdentity, &str> = broker_positions
+        .iter()
+        .filter_map(|position| {
+            let identity = InstrumentIdentity::new(position.uic?, position.asset_type.as_deref()?)?;
+            Some((identity, position.symbol.as_str()))
+        })
+        .collect();
     let mut local: HashMap<String, (String, f64)> = HashMap::new();
     for row in &rows {
         let Ok(symbol) = row.try_get::<String, _>("symbol") else {
@@ -142,8 +155,12 @@ async fn local_broker_quantity_divergences(
         // First row per durable identity is the latest snapshot, matching the
         // basis reader. Imported symbols and Saxo display symbols can differ
         // only by case, so symbol text alone is not a safe comparison key.
+        let compared_symbol = book
+            .identity(&symbol)
+            .and_then(|identity| broker_symbol_by_instrument.get(identity))
+            .map_or_else(|| symbol.clone(), |broker_symbol| broker_symbol.to_string());
         local
-            .entry(position_identity_key(&symbol, isin.as_deref()))
+            .entry(position_identity_key(&compared_symbol, isin.as_deref()))
             .or_insert((symbol, quantity));
     }
     let mut divergences = Vec::new();
@@ -784,5 +801,58 @@ mod tests {
         assert_eq!(divergences[2]["symbol"], json!("NNIT:xcse"));
         assert_eq!(divergences[2]["local_quantity"], json!(5.0));
         assert_eq!(divergences[2]["broker_quantity"], json!(0.0));
+    }
+
+    #[tokio::test]
+    async fn a_share_class_held_under_both_spellings_is_one_position() {
+        // 2026-10-22: the book held `ALK-B:xcse` and Saxo `ALKb:xcse`, and the
+        // check reported both as divergences, one at zero on each side.
+        let state = crate::instrument_identity::tests::share_class_state(&[
+            "CREATE TABLE position_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, imported_at TEXT NOT NULL,
+                symbol TEXT NOT NULL, isin TEXT, quantity REAL NOT NULL,
+                excluded INTEGER NOT NULL DEFAULT 0
+            )",
+            "INSERT INTO position_snapshots (imported_at, symbol, quantity) VALUES
+                ('2026-10-23T08:56:00Z', 'ALK-B:xcse', 28),
+                ('2026-10-23T08:56:00Z', 'NOVO-B:xcse', 10)",
+        ])
+        .await;
+        let instrument =
+            |symbol: &str, uic: i64, asset_type: &str, quantity: f64| BrokerPositionRow {
+                uic: Some(uic),
+                asset_type: Some(asset_type.to_string()),
+                ..broker_row(symbol, quantity)
+            };
+        let matched = local_broker_quantity_divergences(
+            &state,
+            &[
+                instrument("ALKb:xcse", 19782, "Stock", 28.0),
+                instrument("NOVOb:xcse", 15629, "Stock", 10.0),
+            ],
+        )
+        .await
+        .expect("run divergence check");
+        // NOVO-B's indicator row is a CfdOnStock with the same uic, a different
+        // instrument, so it stays unpaired -- the check must not guess.
+        assert_eq!(
+            matched
+                .iter()
+                .map(|row| row["symbol"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["NOVO-B:xcse", "NOVOb:xcse"]
+        );
+
+        let short = local_broker_quantity_divergences(
+            &state,
+            &[instrument("ALKb:xcse", 19782, "Stock", 20.0)],
+        )
+        .await
+        .expect("run divergence check");
+        assert_eq!(
+            short[0],
+            json!({"symbol": "ALKb:xcse", "local_quantity": 28.0, "broker_quantity": 20.0}),
+            "a real difference is still reported, once, under the broker symbol"
+        );
     }
 }

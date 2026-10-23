@@ -3424,3 +3424,23 @@ broker mutation was added.
   - A renamed row gets the decision filed under the system symbol.
 - **Downstream.** The Markov, daily-indicator and Quiver runs see the same symbols: they already get the Saxo spelling from the positions and keep the system spelling from the watchlist. The renamed entries sit earlier in that list. Only Quiver caps it (120 assets before its US filter), so a boundary asset can shift. The decision prompt's watchlist loses the duplicate Saxo-spelled rows, and the system-symbol row now carries the holding.
 - **Tests.** One builds the payload on in-memory SQLite with the runtime schema's own broker DDL (now shared constants). It fails with the old column. A second pins the membership rules: rename once, a different asset type is a different instrument, a configured spelling is never renamed.
+
+## [2026-10-23] Execution | A SELL for a share-class symbol sees its holding
+
+- **The gap (urgent-todo U18).** The system trades under its own symbol (`ALK-B:xcse`); Saxo holds the position as `ALKb:xcse`. Every SELL-side lookup compared symbol text, so a SELL decision for ALK-B, AMBU-B or COLO-B saw zero shares. The trading manager skipped it as "No broker-authoritative sellable holding". Behind that, the order path would have blocked it too: its holding guard, the stop release before a sell and the sell reservations were all symbol-text matches.
+- **Fix.** `src/instrument_identity.rs` builds a symbol-to-instrument map, keyed on `uic` plus `asset_type`.
+  - It reads the newest identity per symbol from `daily_indicator_signals`. A symbol whose resolution changed is not joined to its old instrument.
+  - `broker_position_snapshots` overrides that for the symbols Saxo reports.
+  - `SymbolAliases` lists every symbol naming the same instrument. When no identity is known or the read fails, the list is the symbol alone, which is the old behaviour.
+- **Where it applies.**
+  - `trading_manager`: `latest_position_quantity` and `latest_sellable_position_quantity`, which feed the SELL cap and the BUY-starter "already held" check. Also `broker_open_price`, behind the risk-off evidence for a flatten SELL.
+  - `saxo_order::execute_order`: `broker_position_for_order` finds the holding by symbol, then by instrument, and refuses when two holdings carry the instrument. `protective_stops_to_release` and `active_sell_reservations` match on the alias list.
+  - `saxo_portfolio`: the divergence check compares a local symbol under the broker symbol of the same instrument. Saxo's position rows carry no ISIN, so ISIN pairing never applied to them.
+  - `InstrumentIdentity` applies `state::saxo_instrument_key`, the rule the sweep and the watchlist already use, so there is one definition of the identity.
+- **Live read before deploy.** Across all indicator history and broker snapshots, exactly three instruments have two spellings: ALK-B, AMBU-B, COLO-B. A SELL for each now sees 28, 95 and 14 shares. AMBU-B's would first release resting stop 773. No SELL is reserved against any of them. The local book holds the same quantities under the system symbols, so the 6 divergences pair up.
+- **Not changed.** The BUY-side position-weight cap reads `position_items`, which was not checked here.
+- **Tests.** Seven new ones, all on in-memory SQLite:
+  - three on the alias book: both spellings, asset-type and newest-resolution limits, fallback when a table is missing;
+  - one in `trading_manager` on the cap and open price;
+  - two in `saxo_order`: the holding by instrument, including the ambiguous and wrong-type cases, and stop release plus reservations across spellings;
+  - one in `saxo_portfolio` on the divergence pairing.

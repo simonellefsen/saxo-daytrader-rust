@@ -17,6 +17,7 @@ use crate::{
     db::{row_to_json, sql_escape, value_f64, value_i64},
     drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
     hermes_state::hermes_experiment_status_is_advisory_eligible,
+    instrument_identity::symbol_aliases,
     state::{AppState, SUPPORTED_EXPERIMENT_VARIABLES, json_text},
 };
 
@@ -4787,6 +4788,23 @@ fn is_flatten_role(order: &CandidateOrder) -> bool {
         .is_some_and(|role| role.to_ascii_lowercase().contains("flatten"))
 }
 
+/// Broker open price of a closable holding, matched on every symbol naming the
+/// same instrument, as the SELL quantity cap is.
+async fn broker_open_price(state: &AppState, symbol: &str) -> Option<f64> {
+    sqlx::query(&format!(
+        "SELECT open_price_local FROM broker_position_snapshots
+         WHERE UPPER(symbol) IN ({}) AND quantity > 0 AND COALESCE(can_be_closed, 1) <> 0
+         LIMIT 1",
+        symbol_aliases(state, symbol).await.sql_list()
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|row| row.try_get::<f64, _>("open_price_local").ok())
+    .filter(|price| *price > 0.0)
+}
+
 /// Server-verified evidence that a flatten-role SELL is a genuine risk-off
 /// exit: the broker-held position is under water against our own fresh
 /// daily-indicator close (both in the instrument's local currency), or the
@@ -4798,19 +4816,7 @@ async fn verified_risk_off_evidence(
     symbol: &str,
     today: chrono::NaiveDate,
 ) -> Option<String> {
-    let open_price = sqlx::query(&format!(
-        "SELECT open_price_local FROM broker_position_snapshots
-         WHERE UPPER(symbol) = UPPER('{}') AND quantity > 0 AND COALESCE(can_be_closed, 1) <> 0
-         LIMIT 1",
-        sql_escape(symbol)
-    ))
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|row| row.try_get::<f64, _>("open_price_local").ok())
-    .filter(|price| *price > 0.0);
-    if let Some(open_price) = open_price {
+    if let Some(open_price) = broker_open_price(state, symbol).await {
         let fresh_close = crate::daily_indicators::latest_indicator_signal(state, symbol)
             .await
             .ok()
@@ -5499,13 +5505,16 @@ fn failure_sample_text(row: &JsonValue) -> String {
     }
 }
 
+/// Saxo holds a share class under its compact symbol (`ALKb:xcse`) while
+/// decisions name it the system's way (`ALK-B:xcse`), so the broker rows are
+/// matched on every symbol naming the same instrument.
 async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64> {
     if broker_position_snapshots_available(state).await? {
         let row = sqlx::query(&format!(
             "SELECT COALESCE(SUM(quantity), 0) AS quantity
              FROM broker_position_snapshots
-             WHERE UPPER(symbol) = UPPER('{}')",
-            sql_escape(symbol)
+             WHERE UPPER(symbol) IN ({})",
+            symbol_aliases(state, symbol).await.sql_list()
         ))
         .fetch_optional(&state.pool)
         .await?;
@@ -5541,9 +5550,9 @@ async fn latest_sellable_position_quantity(state: &AppState, symbol: &str) -> Re
         let row = sqlx::query(&format!(
             "SELECT COALESCE(SUM(quantity), 0) AS quantity
              FROM broker_position_snapshots
-             WHERE UPPER(symbol) = UPPER('{}')
+             WHERE UPPER(symbol) IN ({})
                AND COALESCE(can_be_closed, 1) <> 0",
-            sql_escape(symbol)
+            symbol_aliases(state, symbol).await.sql_list()
         ))
         .fetch_optional(&state.pool)
         .await?;
@@ -9203,5 +9212,34 @@ mod tests {
         let projected = compact_hermes_preflight_technical(&unstamped, None, today);
         assert!(projected["run_date"].is_null());
         assert!(projected["age_days"].is_null());
+    }
+
+    #[tokio::test]
+    async fn a_sell_for_the_system_symbol_sees_the_holding_saxo_reports_compactly() {
+        // Saxo holds ALK-B as `ALKb:xcse`; the decision names it `ALK-B:xcse`.
+        // Before instrument matching the cap read zero and skipped the SELL as
+        // "No broker-authoritative sellable holding".
+        let state = crate::instrument_identity::tests::share_class_state(&[]).await;
+        assert_eq!(
+            latest_sellable_position_quantity(&state, "ALK-B:xcse")
+                .await
+                .expect("sellable quantity"),
+            28.0
+        );
+        assert_eq!(
+            latest_position_quantity(&state, "ALK-B:xcse")
+                .await
+                .expect("held quantity"),
+            28.0,
+            "the starter check must see the position as already held"
+        );
+        assert_eq!(broker_open_price(&state, "ALK-B:xcse").await, Some(245.0));
+        // A shared uic in another asset type is a different instrument.
+        assert_eq!(
+            latest_sellable_position_quantity(&state, "NOVO-B:xcse")
+                .await
+                .expect("sellable quantity"),
+            0.0
+        );
     }
 }
