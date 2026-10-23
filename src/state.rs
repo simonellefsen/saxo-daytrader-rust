@@ -7105,6 +7105,8 @@ impl AppState {
         .context("creating missed-trade shadow tracking index")?;
         self.backfill_trading_manager_strategy_type().await?;
         self.backfill_realised_gain_currency_split().await?;
+        self.backfill_filled_protective_stop_lifecycle_tests()
+            .await?;
         self.tune_append_heavy_table_autovacuum().await?;
         Ok(())
     }
@@ -12052,6 +12054,187 @@ market_data:
         assert_eq!(text_value(order, "broker_order_id"), "5100");
         assert_eq!(value_f64(order, "quantity"), 13.0);
         assert_eq!(value_f64(order, "stop_price_local"), 340.84);
+    }
+
+    /// Live on 2026-10-23, 99 lifecycle tests stayed `broker_working` after
+    /// their stop filled. The coverage audit already reported such a symbol as
+    /// unprotected once re-bought, but the operator batch skipped it as
+    /// "a protective stop already exists".
+    #[tokio::test]
+    async fn filled_stop_backfill_makes_a_rebought_symbol_eligible_for_the_batch() {
+        let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;
+        for ddl in [
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER,
+                environment TEXT,
+                symbol TEXT,
+                quantity REAL,
+                stop_price_local REAL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT,
+                request_id TEXT,
+                placement_result_json TEXT,
+                cancellation_result_json TEXT,
+                reconciliation_json TEXT
+            )",
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                quantity REAL,
+                stop_price_local REAL,
+                broker_order_id TEXT,
+                strategy_type TEXT
+            )",
+            "CREATE TABLE broker_position_snapshots (
+                symbol TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                currency TEXT
+            )",
+            "CREATE TABLE protective_stop_prechecks (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                environment TEXT,
+                symbol TEXT,
+                quantity REAL,
+                stop_price_local REAL,
+                status TEXT,
+                result_json TEXT
+            )",
+            "CREATE TABLE daily_indicator_signals (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                run_date TEXT NOT NULL,
+                close REAL,
+                atr14 REAL
+            )",
+        ] {
+            sqlx::query(ddl)
+                .execute(&state.pool)
+                .await
+                .expect("create protective-stop test table");
+        }
+        let old = "2026-08-21T17:05:34Z";
+        sqlx::query(&format!(
+            "INSERT INTO protective_stop_lifecycle_tests
+                (id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                 stop_price_local, status, broker_order_id, external_reference, request_id,
+                 placement_result_json, cancellation_result_json, reconciliation_json) VALUES
+                (1, '{old}', '{old}', 1, 'sim', 'COP:xnys', 10, 128.06, 'broker_working', '5001',
+                 'stop-test:1:1', 'r1', '{{}}', '{{}}', '{{}}'),
+                (2, '{old}', '{old}', 2, 'sim', 'V:xnys', 13, 340.84, 'broker_working', '5002',
+                 'stop-test:2:1', 'r2', '{{}}', '{{}}', '{{}}'),
+                (3, '{old}', '{old}', 3, 'sim', 'AMD:xnas', 7, 448.78, 'placement_preparing', NULL,
+                 'stop-test:3:1', 'r3', '{{}}', '{{}}', '{{}}'),
+                (4, '{old}', '{old}', 4, 'sim', 'BAC:xnys', 58, 59.67, 'broker_cancelled', '5004',
+                 'stop-test:4:1', 'r4', '{{}}', '{{}}', '{{}}')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("insert lifecycle tests");
+        sqlx::query(&format!(
+            "INSERT INTO execution_orders
+                (id, created_at, symbol, action, order_type, status, quantity, stop_price_local,
+                 broker_order_id, strategy_type) VALUES
+                (1, '{old}', 'COP:xnys', 'SELL', 'stop', 'executed', 10, 128.06, '5001', 'protective_stop'),
+                (2, '{old}', 'V:xnys', 'SELL', 'stop', 'broker_working', 13, 340.84, '5002', 'protective_stop'),
+                (4, '{old}', 'BAC:xnys', 'SELL', 'stop', 'broker_cancelled', 58, 59.67, '5004', 'protective_stop')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("insert adopted protective stops");
+        // COP was stopped out and later re-bought; V still holds its stop.
+        sqlx::query(
+            "INSERT INTO broker_position_snapshots (symbol, updated_at, quantity, currency) VALUES
+                ('COP:xnys', '2026-10-22T15:00:00Z', 10, 'USD'),
+                ('V:xnys', '2026-10-22T15:00:00Z', 13, 'USD')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert broker positions");
+        sqlx::query(
+            "INSERT INTO daily_indicator_signals (id, symbol, run_date, close, atr14) VALUES
+                (1, 'COP:xnys', '2026-10-22', 130.0, 3.0),
+                (2, 'V:xnys', '2026-10-22', 345.0, 5.0)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert indicators");
+        let requested = vec!["COP:XNYS".to_string(), "V:XNYS".to_string()];
+        let (state, requested) = (&state, &requested);
+        let batch_targets = || async move {
+            let coverage = state
+                .protective_stop_coverage()
+                .await
+                .expect("read protective-stop coverage");
+            let active = state
+                .symbols_with_active_protective_stops()
+                .await
+                .expect("read active protective stops");
+            crate::api::protective_stop_batch_targets(&coverage, &requested, &active)
+        };
+
+        assert!(
+            batch_targets().await.is_empty(),
+            "before the backfill the filled stop's broker_working row blocks COP"
+        );
+
+        let settled = state
+            .backfill_filled_protective_stop_lifecycle_tests()
+            .await
+            .expect("settle filled lifecycle tests");
+        assert_eq!(settled, 1);
+
+        let rows = state
+            .select_json(
+                "SELECT id, status, updated_at FROM protective_stop_lifecycle_tests ORDER BY id",
+            )
+            .await
+            .expect("read back lifecycle tests");
+        let statuses = rows
+            .iter()
+            .map(|row| (value_f64(row, "id") as i64, text_value(row, "status")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                (1, "filled".to_string()),
+                (2, "broker_working".to_string()),
+                // Only a Saxo lookup can prove the broker never saw a stale
+                // preparation, and the backfill makes no broker call.
+                (3, "placement_preparing".to_string()),
+                (4, "broker_cancelled".to_string()),
+            ]
+        );
+        for row in &rows[1..] {
+            assert_eq!(text_value(row, "updated_at"), old, "untouched row changed");
+        }
+
+        let mut active = state
+            .symbols_with_active_protective_stops()
+            .await
+            .expect("read active protective stops");
+        active.sort();
+        assert_eq!(active, vec!["AMD:XNAS".to_string(), "V:XNYS".to_string()]);
+        assert_eq!(
+            batch_targets().await,
+            vec![("COP:xnys".to_string(), 10.0, 124.0)],
+            "the re-bought symbol gets a stop at close minus 2 x ATR14; V keeps its own"
+        );
+
+        let repeat = state
+            .backfill_filled_protective_stop_lifecycle_tests()
+            .await
+            .expect("re-run the backfill");
+        assert_eq!(repeat, 0, "the backfill runs on every pod start");
     }
 
     #[tokio::test]

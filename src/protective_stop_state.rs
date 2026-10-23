@@ -17,8 +17,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Duration, Utc};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{HashMap, HashSet};
+use tracing::info;
 
 const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
+
+/// Lifecycle statuses that can still stand for a live broker order. A broker
+/// final fill settles any of them to `filled`, the status the manual reconcile
+/// already records for a FinalFill. `filled` is deliberately absent from
+/// `symbols_with_active_protective_stops`, the
+/// `idx_protective_stop_lifecycle_tests_active_source` guard, and adoption.
+const FILL_SETTLEABLE_LIFECYCLE_STATUSES: &str = "'placement_submitted', 'broker_working', \
+     'broker_state_unknown', 'broker_amended', 'cancellation_submitted', 'reconciliation_pending'";
 
 /// A protective stop level derived from stored daily indicators.
 ///
@@ -554,6 +563,113 @@ impl AppState {
         .await
         .context("releasing protective-stop lifecycle test after cancellation")?;
         Ok(())
+    }
+
+    /// Settles the lifecycle-test row behind a protective stop that Saxo
+    /// reported finally filled, once broker sync has marked its execution order
+    /// `executed`.
+    ///
+    /// The fill counterpart of `release_protective_stop_lifecycle_test`. Until
+    /// 2026-10-23 nothing wrote it, so every stop that ever filled stayed
+    /// `broker_working` here -- 99 rows live -- and a symbol stopped out once
+    /// and later re-bought was skipped by the operator batch forever, because
+    /// `symbols_with_active_protective_stops` reads this table.
+    ///
+    /// Bookkeeping only, with no broker call. Keyed on `broker_order_id`, so a
+    /// fill that is not a protective stop matches nothing. Each update is
+    /// conditional on the status it read, so a concurrent writer is never
+    /// overwritten, and a replay matches no row. Returns the rows settled.
+    pub async fn record_protective_stop_lifecycle_fill(
+        &self,
+        broker_order_id: &str,
+        execution_order_id: i64,
+        source: &str,
+    ) -> Result<u64> {
+        let broker_order_id = broker_order_id.trim();
+        if broker_order_id.is_empty() {
+            return Ok(0);
+        }
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, status, reconciliation_json
+                 FROM protective_stop_lifecycle_tests
+                 WHERE broker_order_id = '{}'
+                   AND status IN ({FILL_SETTLEABLE_LIFECYCLE_STATUSES})
+                 ORDER BY id ASC",
+                sql_escape(broker_order_id)
+            ))
+            .await?;
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut settled = 0;
+        for row in &rows {
+            let previous_status = text_value(row, "status");
+            let reconciliation = json!({
+                "status": "filled",
+                "source": source,
+                "settled_at": now,
+                "broker_order_id": broker_order_id,
+                "execution_order_id": execution_order_id,
+                "previous_status": previous_status,
+                "previous_reconciliation": row.get("reconciliation_json").cloned().unwrap_or(JsonValue::Null),
+                "safety": "local_bookkeeping_after_broker_sync_recorded_the_final_fill_no_broker_call"
+            });
+            let updated = sqlx::query(
+                "UPDATE protective_stop_lifecycle_tests
+                 SET updated_at = $1, status = 'filled', reconciliation_json = $2
+                 WHERE id = $3 AND status = $4",
+            )
+            .bind(&now)
+            .bind(reconciliation.to_string())
+            .bind(value_i64(row, "id"))
+            .bind(&previous_status)
+            .execute(&self.pool)
+            .await
+            .context("settling filled protective-stop lifecycle test")?;
+            settled += updated.rows_affected();
+        }
+        Ok(settled)
+    }
+
+    /// Startup backfill for `record_protective_stop_lifecycle_fill`: settles
+    /// every lifecycle row whose execution order broker sync already marked
+    /// `executed`. Idempotent, so every pod can run it on every start.
+    ///
+    /// A `placement_preparing` row with no broker order id is deliberately left
+    /// alone. Only a Saxo lookup can prove the broker never saw it, and
+    /// `abandon_protective_stop_preparation` records that such a lookup found
+    /// nothing; this backfill makes no broker call, so it cannot make that
+    /// claim. `resolve_stale_protective_stop_preparations` does the lookup.
+    pub(crate) async fn backfill_filled_protective_stop_lifecycle_tests(&self) -> Result<u64> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT t.broker_order_id, o.id AS execution_order_id
+                 FROM protective_stop_lifecycle_tests t
+                 JOIN execution_orders o ON o.broker_order_id = t.broker_order_id
+                 WHERE t.status IN ({FILL_SETTLEABLE_LIFECYCLE_STATUSES})
+                   AND t.broker_order_id IS NOT NULL
+                   AND t.broker_order_id <> ''
+                   AND o.status = 'executed'
+                 ORDER BY t.id ASC"
+            ))
+            .await
+            .context("loading filled protective stops whose lifecycle tests are unsettled")?;
+        let mut settled = 0;
+        for row in &rows {
+            settled += self
+                .record_protective_stop_lifecycle_fill(
+                    &text_value(row, "broker_order_id"),
+                    value_i64(row, "execution_order_id"),
+                    "startup_backfill_of_fills_recorded_before_lifecycle_settlement",
+                )
+                .await?;
+        }
+        if settled > 0 {
+            info!(
+                rows = settled,
+                "settled lifecycle tests of protective stops that had already filled"
+            );
+        }
+        Ok(settled)
     }
 
     /// Adopts every broker-confirmed protective stop into `execution_orders`.

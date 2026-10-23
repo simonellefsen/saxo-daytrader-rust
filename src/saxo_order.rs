@@ -2641,10 +2641,29 @@ async fn sync_final_fill(
         .await?;
     }
     update_order_broker_status(state, order, "executed", broker_state, ledger_id).await?;
+    // A filled protective stop has to leave the lifecycle table's active set
+    // too, or the operator batch skips the symbol for good once it is
+    // re-bought. The fill above is already durable, so a failure here is
+    // logged rather than reported as a failed sync; the startup backfill
+    // settles anything it leaves behind.
+    let lifecycle_tests_settled = match state
+        .record_protective_stop_lifecycle_fill(broker_order_id, order_id, "broker_order_sync")
+        .await
+    {
+        Ok(settled) => settled,
+        Err(err) => {
+            warn!(
+                order_id,
+                broker_order_id, "could not settle the filled stop's lifecycle test: {err:#}"
+            );
+            0
+        }
+    };
     Ok(json!({
         "status": "executed",
         "updated": true,
         "fills": inserted_fill,
+        "lifecycle_tests_settled": lifecycle_tests_settled,
         "order_id": order_id,
         "symbol": symbol,
         "broker_order_id": broker_order_id,
@@ -4835,6 +4854,30 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create broker-position test table");
+        // A final fill settles the matching protective-stop lifecycle test, so
+        // the table exists wherever fills are reconciled.
+        sqlx::query(
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER,
+                environment TEXT,
+                symbol TEXT,
+                quantity REAL,
+                stop_price_local REAL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT,
+                request_id TEXT,
+                placement_result_json TEXT,
+                cancellation_result_json TEXT,
+                reconciliation_json TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create protective-stop lifecycle test table");
 
         AppState {
             config_path: PathBuf::from("saxo-order-claim-test.yaml"),
@@ -6695,6 +6738,149 @@ mod tests {
         assert!((snapshot.try_get::<f64, _>("cost_basis_dkk").unwrap() - 7060.11825).abs() < 1e-6);
         assert!(
             (snapshot.try_get::<f64, _>("open_price_local").unwrap() - 1005.5 / 12.0).abs() < 1e-6
+        );
+    }
+
+    /// Until 2026-10-23 a filled stop's lifecycle test stayed `broker_working`
+    /// forever, which kept the symbol in `symbols_with_active_protective_stops`
+    /// and made the operator batch skip it after a re-buy.
+    #[tokio::test]
+    async fn a_filled_protective_stop_leaves_the_active_lifecycle_set_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO position_snapshots (
+                imported_at, instrument_name, symbol, isin, quantity, currency,
+                cost_basis_local, cost_basis_dkk, excluded
+            ) VALUES (
+                '2026-08-21T00:00:00Z', 'ConocoPhillips', 'COP:xnys', 'US20825C1045',
+                10, 'USD', 1300, 9126.0, 0
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed current position cost basis");
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, adapter, quantity, price_local, strategy_type
+            ) VALUES
+                (1, 'broker_working', '5039759932', '{}', 'USD',
+                 'SELL', 'COP:xnys', 'live', 'saxo', 10, NULL, 'protective_stop'),
+                (2, 'broker_working', '5040000001', '{}', 'USD',
+                 'SELL', 'V:xnys', 'live', 'saxo', 13, NULL, 'protective_stop')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed adopted protective stops");
+        let placed_at = "2026-08-21T17:05:54Z";
+        sqlx::query(&format!(
+            "INSERT INTO protective_stop_lifecycle_tests
+                (id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                 stop_price_local, status, broker_order_id, external_reference, request_id,
+                 placement_result_json, cancellation_result_json, reconciliation_json) VALUES
+                (1, '{placed_at}', '{placed_at}', 1, 'sim', 'COP:xnys', 10, 128.06,
+                 'broker_working', '5039759932', 'stop-test:1:1', 'r1', '{{}}', '{{}}',
+                 '{{\"status\":\"broker_working\",\"broker_status\":\"Working\"}}'),
+                (2, '{placed_at}', '{placed_at}', 2, 'sim', 'V:xnys', 13, 340.84,
+                 'broker_working', '5040000001', 'stop-test:2:1', 'r2', '{{}}', '{{}}', '{{}}')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("seed working lifecycle tests");
+        let before = state
+            .symbols_with_active_protective_stops()
+            .await
+            .expect("read active stops before the fill");
+        assert!(before.contains(&"COP:XNYS".to_string()));
+
+        let order = json!({
+            "id": 1,
+            "symbol": "COP:xnys",
+            "action": "SELL",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 10.0,
+            "currency": "USD",
+            "strategy_type": "protective_stop",
+            "execution_result_json": {}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 10.0,
+                "ExecutionPrice": 127.9,
+                "Currency": "USD"
+            }
+        });
+        // Starts after Saxo has returned the final fill; no session is loaded
+        // and no HTTP request is made.
+        let result = sync_final_fill(&state, &order, "5039759932", 10.0, 127.9, &broker_state)
+            .await
+            .expect("reconcile the stop's final fill");
+        assert_eq!(result["status"], json!("executed"));
+        assert_eq!(result["lifecycle_tests_settled"], json!(1));
+
+        let lifecycle = |id: i64| {
+            let pool = state.pool.clone();
+            async move {
+                sqlx::query(
+                    "SELECT status, updated_at, reconciliation_json
+                     FROM protective_stop_lifecycle_tests WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read lifecycle test")
+            }
+        };
+        let filled = lifecycle(1).await;
+        assert_eq!(filled.try_get::<String, _>("status").unwrap(), "filled");
+        let reconciliation: JsonValue = serde_json::from_str(
+            &filled
+                .try_get::<String, _>("reconciliation_json")
+                .expect("settled reconciliation"),
+        )
+        .expect("parse settled reconciliation");
+        assert_eq!(reconciliation["source"], json!("broker_order_sync"));
+        assert_eq!(reconciliation["execution_order_id"], json!(1));
+        assert_eq!(reconciliation["previous_status"], json!("broker_working"));
+        // The broker confirmation that made the stop count stays in the audit.
+        assert_eq!(
+            reconciliation["previous_reconciliation"]["broker_status"],
+            json!("Working")
+        );
+
+        // The other symbol's stop is still resting and must not be touched.
+        let working = lifecycle(2).await;
+        assert_eq!(
+            working.try_get::<String, _>("status").unwrap(),
+            "broker_working"
+        );
+        assert_eq!(
+            working.try_get::<String, _>("updated_at").unwrap(),
+            placed_at
+        );
+
+        let after = state
+            .symbols_with_active_protective_stops()
+            .await
+            .expect("read active stops after the fill");
+        assert_eq!(after, vec!["V:XNYS".to_string()]);
+
+        // Broker sync can see the same final fill again; the replay must settle
+        // nothing and leave the recorded settlement as it was.
+        let replay = sync_final_fill(&state, &order, "5039759932", 10.0, 127.9, &broker_state)
+            .await
+            .expect("replay the stop's final fill");
+        assert_eq!(replay["lifecycle_tests_settled"], json!(0));
+        assert_eq!(
+            lifecycle(1)
+                .await
+                .try_get::<String, _>("reconciliation_json")
+                .unwrap(),
+            filled.try_get::<String, _>("reconciliation_json").unwrap()
         );
     }
 

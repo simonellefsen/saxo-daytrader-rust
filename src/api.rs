@@ -1005,7 +1005,31 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
             return redirect_to_app(&state, return_to).into_response();
         }
     };
-    let requested = request.symbols.clone();
+    let targets = protective_stop_batch_targets(&coverage, &request.symbols, &already_protected);
+
+    let total = targets.len();
+    info!(
+        requested = request.symbols.len(),
+        eligible = total,
+        "starting SIM protective-stop batch placement"
+    );
+    // Placement runs detached. A dozen orders take longer than a proxy will
+    // hold a request open, and when the client disconnects axum drops the
+    // handler future -- mid-batch that can place an order at Saxo and lose the
+    // record of it. Observed 2026-07-25: a 12-symbol batch timed out and left an
+    // orphaned preparation. The operator watches the lifecycle table instead.
+    tokio::spawn(run_protective_stop_batch(state.clone(), targets));
+    redirect_to_app(&state, return_to).into_response()
+}
+
+/// The `(symbol, quantity, stop_price)` targets a batch may place, sorted by
+/// symbol: requested symbols the coverage audit reports as an exception with a
+/// computed stop, minus any that already have an active protective stop.
+pub(crate) fn protective_stop_batch_targets(
+    coverage: &JsonValue,
+    requested: &[String],
+    already_protected: &[String],
+) -> Vec<(String, f64, f64)> {
     let mut targets = Vec::new();
     for exception in coverage
         .get("exceptions")
@@ -1049,20 +1073,7 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
         }
     }
     targets.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let total = targets.len();
-    info!(
-        requested = requested.len(),
-        eligible = total,
-        "starting SIM protective-stop batch placement"
-    );
-    // Placement runs detached. A dozen orders take longer than a proxy will
-    // hold a request open, and when the client disconnects axum drops the
-    // handler future -- mid-batch that can place an order at Saxo and lose the
-    // record of it. Observed 2026-07-25: a 12-symbol batch timed out and left an
-    // orphaned preparation. The operator watches the lifecycle table instead.
-    tokio::spawn(run_protective_stop_batch(state.clone(), targets));
-    redirect_to_app(&state, return_to).into_response()
+    targets
 }
 
 /// The outcome of one protective-stop placement attempt.
