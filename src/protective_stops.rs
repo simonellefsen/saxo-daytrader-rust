@@ -21,9 +21,9 @@ use tracing::{info, warn};
 use crate::{
     api::{StopPlacementOutcome, place_one_protective_stop},
     config::yaml_f64,
-    db::{value_f64, value_i64},
+    db::value_f64,
     saxo_order::cancel_protective_stop_for_replacement,
-    state::AppState,
+    state::{AppState, saxo_instrument_key},
 };
 
 /// Trimmed string field from a JSON row.
@@ -208,15 +208,6 @@ fn usable_stop_price(candidate: f64, close: f64) -> Option<f64> {
     (candidate.is_finite() && candidate > 0.0 && candidate < close).then_some(candidate)
 }
 
-/// Saxo's identity for an instrument. A `Uic` alone is not enough: Saxo only
-/// guarantees it unique within an asset type, and a close borrowed from a
-/// different instrument would put the stop at a meaningless level.
-fn instrument_key(row: &JsonValue) -> Option<(i64, String)> {
-    let uic = value_i64(row, "uic");
-    let asset_type = row_text(row, "asset_type").trim().to_ascii_uppercase();
-    (uic > 0 && !asset_type.is_empty()).then_some((uic, asset_type))
-}
-
 /// Reads the desired-versus-actual picture for every held position.
 async fn stop_targets(state: &AppState) -> anyhow::Result<Vec<StopTarget>> {
     let positions = state
@@ -262,11 +253,11 @@ async fn stop_targets(state: &AppState) -> anyhow::Result<Vec<StopTarget>> {
         // first day the only indicator row carries the system symbol. Match the
         // instrument first and the symbol second. Rows arrive newest-first, so
         // the first match wins.
-        let indicator = instrument_key(position)
+        let indicator = saxo_instrument_key(position)
             .and_then(|instrument| {
                 indicators
                     .iter()
-                    .find(|row| instrument_key(row).as_ref() == Some(&instrument))
+                    .find(|row| saxo_instrument_key(row).as_ref() == Some(&instrument))
             })
             .or_else(|| indicators.iter().find(|row| key(row) == upper));
         // Resting stops stay matched on the broker symbol. A stop can only be

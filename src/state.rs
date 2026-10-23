@@ -123,6 +123,39 @@ const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 pub(crate) const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const HOLDING_THESIS_REVIEW_LIMIT: i64 = 50;
+// Shared with tests so a query against a column the schema lacks fails there.
+const BROKER_POSITION_SNAPSHOTS_DDL: &str = "CREATE TABLE IF NOT EXISTS broker_position_snapshots (
+    symbol TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    instrument_name TEXT,
+    isin TEXT,
+    uic INTEGER,
+    asset_type TEXT,
+    quantity REAL NOT NULL,
+    currency TEXT,
+    open_price_local REAL,
+    open_price_including_costs_local REAL,
+    execution_time_open TEXT,
+    value_date TEXT,
+    market_state TEXT,
+    can_be_closed INTEGER,
+    raw_payload_json TEXT NOT NULL
+)";
+const BROKER_INSTRUMENT_EXPOSURES_DDL: &str =
+    "CREATE TABLE IF NOT EXISTS broker_instrument_exposures (
+    symbol TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    uic INTEGER,
+    asset_type TEXT,
+    quantity REAL,
+    average_open_price REAL,
+    profit_loss_on_trade REAL,
+    instrument_price_day_percent_change REAL,
+    currency TEXT,
+    calculation_reliability TEXT,
+    can_be_closed INTEGER,
+    raw_payload_json TEXT NOT NULL
+)";
 pub(crate) const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3877,12 +3910,42 @@ impl AppState {
             );
         }
         let configured_extra_symbols = configured_extra_watch_symbols(&self.config);
-        let mut seen = HashSet::new();
+        // Membership is decided per instrument, so the rows that carry Saxo's
+        // instrument identity are read before any branch admits a symbol.
+        let broker_positions = self
+            .select_json("SELECT symbol, uic, asset_type FROM broker_position_snapshots")
+            .await
+            .unwrap_or_default();
+        let broker_exposures = self
+            .select_json(
+                "SELECT symbol, updated_at, uic, asset_type, quantity, currency, average_open_price, profit_loss_on_trade, instrument_price_day_percent_change, calculation_reliability FROM broker_instrument_exposures ORDER BY updated_at DESC, symbol ASC",
+            )
+            .await
+            .unwrap_or_default();
+        let latest_indicator_rows = self
+            .select_json(
+                "SELECT symbol, uic, asset_type, run_date, status, nearest_support, next_support,
+                        downside_to_support_pct, downside_after_break_pct,
+                        support_break_risk, support_break_risk_label, support_confidence,
+                        support_history_coverage, support_touch_count
+                 FROM daily_indicator_signals
+                 WHERE run_id = (
+                    SELECT id FROM daily_indicator_runs
+                    ORDER BY run_date DESC, created_at DESC LIMIT 1
+                 )",
+            )
+            .await
+            .unwrap_or_default();
+        let mut members = WatchlistMembers::new(
+            broker_positions.iter().chain(&broker_exposures),
+            &latest_indicator_rows,
+            configured_universe.iter().chain(&configured_extra_symbols),
+        );
         let mut monitored = Vec::new();
         for row in self.position_items(250).await.unwrap_or_default() {
             let symbol = text_value(&row, "symbol");
-            if !symbol.is_empty() && seen.insert(watchlist_symbol_key(&symbol)) {
-                monitored.push(row);
+            if !symbol.is_empty() {
+                members.admit(&mut monitored, &symbol, || row);
             }
         }
         for row in self
@@ -3897,37 +3960,43 @@ impl AppState {
                 continue;
             }
             if text_value(&row, "updated_at") < stale_cutoff {
-                if legacy_archive_fallback && seen.insert(watchlist_symbol_key(&symbol)) {
+                if legacy_archive_fallback {
                     // Keep the symbol as a universe member only while
                     // migrating installations without a configured universe.
                     // The dead quote itself never masquerades as live data.
-                    monitored.push(json!({
-                        "symbol": symbol,
-                        "quote_status": "stale_quote_dropped",
-                        "source": "price_snapshot_archive",
-                    }));
+                    members.admit(&mut monitored, &symbol, || {
+                        json!({
+                            "symbol": symbol,
+                            "quote_status": "stale_quote_dropped",
+                            "source": "price_snapshot_archive",
+                        })
+                    });
                 }
                 continue;
             }
-            if !seen.insert(watchlist_symbol_key(&symbol)) {
-                continue;
-            }
-            let mut item = row.as_object().cloned().unwrap_or_default();
-            item.insert("instrument_name".to_string(), JsonValue::from(symbol));
-            monitored.push(JsonValue::Object(item));
+            members.admit(&mut monitored, &symbol, || {
+                let mut item = row.as_object().cloned().unwrap_or_default();
+                item.insert("instrument_name".to_string(), JsonValue::from(symbol.clone()));
+                JsonValue::Object(item)
+            });
         }
-        for row in self
-            .select_json(
-                "SELECT symbol, instrument_name, updated_at, quantity, currency, average_open_price, profit_loss_on_trade, instrument_price_day_percent_change, calculation_reliability FROM broker_instrument_exposures ORDER BY updated_at DESC, symbol ASC",
-            )
-            .await
-            .unwrap_or_default()
-        {
-            let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(watchlist_symbol_key(&symbol)) {
+        for row in &broker_exposures {
+            let symbol = text_value(row, "symbol");
+            if symbol.is_empty() {
                 continue;
             }
-            monitored.push(row);
+            members.admit(&mut monitored, &symbol, || {
+                let mut item = row.as_object().cloned().unwrap_or_default();
+                // The identity columns decided membership; the row keeps the
+                // shape of the other branches.
+                item.remove("uic");
+                item.remove("asset_type");
+                item.insert(
+                    "instrument_name".to_string(),
+                    JsonValue::from(instrument_name_for_symbol(&symbol)),
+                );
+                JsonValue::Object(item)
+            });
         }
         let decisions: HashMap<String, JsonValue> = self
             .latest_symbol_decisions()
@@ -3937,71 +4006,65 @@ impl AppState {
             .filter(|(_, decision)| text_value(decision, "created_at") >= stale_cutoff)
             .collect();
         for (symbol, decision) in &decisions {
-            if symbol.is_empty() || !seen.insert(watchlist_symbol_key(symbol)) {
+            if symbol.is_empty() {
                 continue;
             }
-            let source = decision.get("source").cloned().unwrap_or_else(|| json!({}));
-            let technical = source
-                .get("technical")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            monitored.push(json!({
-                "symbol": symbol,
-                "instrument_name": instrument_name_for_symbol(symbol),
-                "updated_at": decision.get("created_at").cloned().unwrap_or(JsonValue::Null),
-                "currency": technical.get("currency").cloned().unwrap_or(JsonValue::Null),
-                "current_price_local": technical.get("latest_close").cloned().unwrap_or(JsonValue::Null),
-                "change_pct": JsonValue::Null,
-                "market_value_dkk": 0.0,
-                "daily_pnl_dkk": 0.0,
-                "allocation_pct": 0.0,
-                "quote_status": "decision_snapshot",
-                "technical_status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
-                "source": source.get("source").cloned().unwrap_or_else(|| JsonValue::from("decision_report")),
-                "decision": decision,
-                "exchange": exchange_code(symbol).to_uppercase(),
-                "region": exchange_region(symbol),
-            }));
+            members.admit(&mut monitored, symbol, || {
+                let source = decision.get("source").cloned().unwrap_or_else(|| json!({}));
+                let technical = source
+                    .get("technical")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                json!({
+                    "symbol": symbol,
+                    "instrument_name": instrument_name_for_symbol(symbol),
+                    "updated_at": decision.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                    "currency": technical.get("currency").cloned().unwrap_or(JsonValue::Null),
+                    "current_price_local": technical.get("latest_close").cloned().unwrap_or(JsonValue::Null),
+                    "change_pct": JsonValue::Null,
+                    "market_value_dkk": 0.0,
+                    "daily_pnl_dkk": 0.0,
+                    "allocation_pct": 0.0,
+                    "quote_status": "decision_snapshot",
+                    "technical_status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
+                    "source": source.get("source").cloned().unwrap_or_else(|| JsonValue::from("decision_report")),
+                    "decision": decision,
+                    "exchange": exchange_code(symbol).to_uppercase(),
+                    "region": exchange_region(symbol),
+                })
+            });
         }
         let mut configured_symbols_added = 0usize;
         for symbol in configured_universe {
-            if seen.insert(watchlist_symbol_key(&symbol)) {
-                monitored.push(configured_watchlist_row(
-                    &symbol,
-                    "configured_analysis_universe",
-                ));
+            if members.admit(&mut monitored, &symbol, || {
+                configured_watchlist_row(&symbol, "configured_analysis_universe")
+            }) {
                 configured_symbols_added += 1;
             }
         }
         let mut extra_symbols_added = 0usize;
         for symbol in configured_extra_symbols {
-            if seen.insert(watchlist_symbol_key(&symbol)) {
-                monitored.push(configured_watchlist_row(&symbol, "configured_extra_watch"));
+            if members.admit(&mut monitored, &symbol, || {
+                configured_watchlist_row(&symbol, "configured_extra_watch")
+            }) {
                 extra_symbols_added += 1;
             }
         }
-        let indicator_support_by_symbol: HashMap<String, JsonValue> = self
-            .select_json(
-                "SELECT symbol, run_date, status, nearest_support, next_support,
-                        downside_to_support_pct, downside_after_break_pct,
-                        support_break_risk, support_break_risk_label, support_confidence,
-                        support_history_coverage, support_touch_count
-                 FROM daily_indicator_signals
-                 WHERE run_id = (
-                    SELECT id FROM daily_indicator_runs
-                    ORDER BY run_date DESC, created_at DESC LIMIT 1
-                 )",
-            )
-            .await
-            .unwrap_or_default()
+        let indicator_support_by_symbol: HashMap<String, JsonValue> = latest_indicator_rows
             .into_iter()
             .map(|row| (watchlist_symbol_key(&text_value(&row, "symbol")), row))
             .collect();
         for item in &mut monitored {
             let symbol = text_value(item, "symbol");
             if let Some(obj) = item.as_object_mut() {
-                obj.entry("decision".to_string())
-                    .or_insert_with(|| decisions.get(&symbol).cloned().unwrap_or(JsonValue::Null));
+                // A held row renamed to its system symbol arrives with the
+                // decision looked up under Saxo's spelling, usually none.
+                if obj.get("decision").is_none_or(JsonValue::is_null) {
+                    obj.insert(
+                        "decision".to_string(),
+                        decisions.get(&symbol).cloned().unwrap_or(JsonValue::Null),
+                    );
+                }
                 obj.entry("exchange".to_string())
                     .or_insert_with(|| JsonValue::from(exchange_code(&symbol).to_uppercase()));
                 obj.entry("region".to_string())
@@ -6486,28 +6549,10 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating currency FX rates expiry index")?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS broker_position_snapshots (
-                symbol TEXT PRIMARY KEY,
-                updated_at TEXT NOT NULL,
-                instrument_name TEXT,
-                isin TEXT,
-                uic INTEGER,
-                asset_type TEXT,
-                quantity REAL NOT NULL,
-                currency TEXT,
-                open_price_local REAL,
-                open_price_including_costs_local REAL,
-                execution_time_open TEXT,
-                value_date TEXT,
-                market_state TEXT,
-                can_be_closed INTEGER,
-                raw_payload_json TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await
-        .context("creating broker position snapshots table")?;
+        sqlx::query(BROKER_POSITION_SNAPSHOTS_DDL)
+            .execute(&self.pool)
+            .await
+            .context("creating broker position snapshots table")?;
         if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS protective_stop_prechecks (
@@ -6611,25 +6656,10 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating active protective-stop lifecycle test uniqueness guard")?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS broker_instrument_exposures (
-                symbol TEXT PRIMARY KEY,
-                updated_at TEXT NOT NULL,
-                uic INTEGER,
-                asset_type TEXT,
-                quantity REAL,
-                average_open_price REAL,
-                profit_loss_on_trade REAL,
-                instrument_price_day_percent_change REAL,
-                currency TEXT,
-                calculation_reliability TEXT,
-                can_be_closed INTEGER,
-                raw_payload_json TEXT NOT NULL
-            )",
-        )
-        .execute(&self.pool)
-        .await
-        .context("creating broker instrument exposures table")?;
+        sqlx::query(BROKER_INSTRUMENT_EXPOSURES_DDL)
+            .execute(&self.pool)
+            .await
+            .context("creating broker instrument exposures table")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS broker_balance_snapshots (
                 singleton_key TEXT PRIMARY KEY,
@@ -8506,6 +8536,151 @@ fn normalize_watchlist_symbol(value: &str) -> Option<String> {
 
 fn watchlist_symbol_key(symbol: &str) -> String {
     symbol.trim().to_ascii_lowercase()
+}
+
+/// Saxo's identity for an instrument, from a row's `uic` and `asset_type`. A
+/// `Uic` alone is not enough: Saxo only guarantees it unique within an asset
+/// type, and data borrowed from a different instrument would sit under the
+/// right symbol looking correct.
+pub(crate) fn saxo_instrument_key(row: &JsonValue) -> Option<(i64, String)> {
+    let uic = value_i64(row, "uic");
+    let asset_type = text_value(row, "asset_type").trim().to_ascii_uppercase();
+    (uic > 0 && !asset_type.is_empty()).then_some((uic, asset_type))
+}
+
+/// Watchlist membership that lists a held instrument once.
+///
+/// Saxo reports a holding under its own spelling (`ALKb:xcse`) while the
+/// universe, decision reports, and orders name the instrument by the system
+/// symbol (`ALK-B:xcse`), so membership keyed on the symbol listed it twice.
+/// The broker snapshots give each Saxo spelling its instrument, and the latest
+/// indicator run gives the system spelling the instrument it resolved to.
+///
+/// A held instrument keeps the slot of the first spelling seen. When that is a
+/// spelling only Saxo uses -- not a configured symbol -- the first other
+/// spelling of the instrument renames it: decisions and orders use that
+/// symbol, and keeping it listed keeps the Markov and indicator runs refreshing
+/// it, as the positions already give them Saxo's. A further spelling is listed
+/// under its own symbol, as before, rather than dropped: dropping it would stop
+/// the indicator run that identified it, and the next build would list it
+/// again.
+struct WatchlistMembers {
+    held_instrument_by_symbol: HashMap<String, (i64, String)>,
+    broker_spellings: HashSet<String>,
+    configured_spellings: HashSet<String>,
+    held_entries: HashMap<(i64, String), HeldWatchlistEntry>,
+    listed_symbols: HashSet<String>,
+}
+
+struct HeldWatchlistEntry {
+    index: usize,
+    renameable: bool,
+}
+
+impl WatchlistMembers {
+    fn new<'a>(
+        broker_rows: impl IntoIterator<Item = &'a JsonValue>,
+        indicator_rows: &[JsonValue],
+        configured_symbols: impl IntoIterator<Item = &'a String>,
+    ) -> Self {
+        let mut held_instrument_by_symbol = HashMap::new();
+        let mut broker_spellings = HashSet::new();
+        for row in broker_rows {
+            let symbol = watchlist_symbol_key(&text_value(row, "symbol"));
+            if let Some(instrument) = saxo_instrument_key(row)
+                && !symbol.is_empty()
+            {
+                broker_spellings.insert(symbol.clone());
+                held_instrument_by_symbol.insert(symbol, instrument);
+            }
+        }
+        let held = held_instrument_by_symbol
+            .values()
+            .cloned()
+            .collect::<HashSet<_>>();
+        for row in indicator_rows {
+            if let Some(instrument) = saxo_instrument_key(row)
+                && held.contains(&instrument)
+            {
+                held_instrument_by_symbol
+                    .entry(watchlist_symbol_key(&text_value(row, "symbol")))
+                    .or_insert(instrument);
+            }
+        }
+        Self {
+            held_instrument_by_symbol,
+            broker_spellings,
+            configured_spellings: configured_symbols
+                .into_iter()
+                .map(|symbol| watchlist_symbol_key(symbol))
+                .collect(),
+            held_entries: HashMap::new(),
+            listed_symbols: HashSet::new(),
+        }
+    }
+
+    /// Lists `row()` unless the symbol, or another spelling of the same held
+    /// instrument, is already listed, and returns whether it did.
+    fn admit(
+        &mut self,
+        monitored: &mut Vec<JsonValue>,
+        symbol: &str,
+        row: impl FnOnce() -> JsonValue,
+    ) -> bool {
+        let symbol_key = watchlist_symbol_key(symbol);
+        if let Some(instrument) = self.held_instrument_by_symbol.get(&symbol_key) {
+            let broker_spelling = self.broker_spellings.contains(&symbol_key);
+            match self.held_entries.get_mut(instrument) {
+                None => {
+                    self.held_entries.insert(
+                        instrument.clone(),
+                        HeldWatchlistEntry {
+                            index: monitored.len(),
+                            renameable: broker_spelling
+                                && !self.configured_spellings.contains(&symbol_key),
+                        },
+                    );
+                    self.listed_symbols.insert(symbol_key);
+                    monitored.push(row());
+                    return true;
+                }
+                Some(_) if broker_spelling => return false,
+                Some(entry) if entry.renameable => {
+                    entry.renameable = false;
+                    take_system_symbol(&mut monitored[entry.index], symbol);
+                    self.listed_symbols.insert(symbol_key);
+                    return false;
+                }
+                Some(_) => {}
+            }
+        }
+        if !self.listed_symbols.insert(symbol_key) {
+            return false;
+        }
+        monitored.push(row());
+        true
+    }
+}
+
+/// Renames a watchlist row from Saxo's spelling to the system symbol. A name
+/// derived from the old spelling follows it; a broker description stays.
+fn take_system_symbol(row: &mut JsonValue, symbol: &str) {
+    let Some(object) = row.as_object_mut() else {
+        return;
+    };
+    let previous = object
+        .get("symbol")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let name = object.get("instrument_name").and_then(JsonValue::as_str);
+    if name.is_none_or(|name| name == previous || name == instrument_name_for_symbol(&previous)) {
+        object.insert(
+            "instrument_name".to_string(),
+            JsonValue::from(instrument_name_for_symbol(symbol)),
+        );
+    }
+    object.insert("symbol".to_string(), JsonValue::from(symbol));
 }
 
 fn configured_watchlist_row(symbol: &str, source: &str) -> JsonValue {
@@ -10853,6 +11028,174 @@ market_data:
             configured_extra_watch_symbols(&config),
             vec!["SPCX:xnas".to_string(), "RKLB:xnas".to_string()]
         );
+    }
+
+    /// The exposure branch selected an `instrument_name` column the table has
+    /// never had, so it failed on every read. Saxo also spells a held instrument
+    /// its own way (`ALKb:xcse`) while a decision names it by the system symbol
+    /// (`ALK-B:xcse`); the two share a Uic and must be listed once.
+    #[tokio::test]
+    async fn a_held_exposure_is_listed_once_under_the_system_symbol() {
+        let state = runtime_settings_test_state(
+            "market_data:\n  watchlists:\n    universe_symbols:\n      - nvda:xnas\n",
+        )
+        .await;
+        // The broker and indicator tables use the runtime schema's own DDL, so
+        // a column the code selects but the schema lacks fails here.
+        for statement in [
+            BROKER_POSITION_SNAPSHOTS_DDL,
+            BROKER_INSTRUMENT_EXPOSURES_DDL,
+            "CREATE TABLE portfolio_price_snapshots (
+                symbol TEXT PRIMARY KEY, updated_at TEXT NOT NULL, current_price_local REAL,
+                change_pct REAL, currency TEXT, source TEXT, status TEXT
+            )",
+            "CREATE TABLE decision_reports (
+                id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, status TEXT NOT NULL,
+                analysis_pulse_key TEXT, analysis_pulse_label TEXT, pulse_mode TEXT,
+                queue_eligible INTEGER, report_json TEXT
+            )",
+        ]
+        .into_iter()
+        .chain(crate::daily_indicators::create_schema_sql().iter().copied())
+        {
+            sqlx::query(statement)
+                .execute(&state.pool)
+                .await
+                .expect("create watchlist test table");
+        }
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let today = Utc::now().date_naive().to_string();
+        for statement in [
+            format!(
+                "INSERT INTO broker_instrument_exposures (
+                    symbol, updated_at, uic, asset_type, quantity, average_open_price,
+                    profit_loss_on_trade, instrument_price_day_percent_change, currency,
+                    calculation_reliability, can_be_closed, raw_payload_json
+                ) VALUES
+                    ('ALKb:xcse', '{now}', 19782, 'Stock', 28, 250.5, 112.0, 0.4, 'DKK', 'Ok', 1, '{{}}'),
+                    ('AMGN:xnas', '{now}', 209, 'Stock', 2, 300.0, 15.0, -0.2, 'USD', 'Ok', 1, '{{}}')"
+            ),
+            format!(
+                "INSERT INTO daily_indicator_runs (
+                    id, created_at, run_date, status, asset_count, success_count, error_count,
+                    config_json, summary_json
+                ) VALUES ('run-1', '{now}', '{today}', 'completed', 1, 1, 0, '{{}}', '{{}}')"
+            ),
+            format!(
+                "INSERT INTO daily_indicator_signals (
+                    id, run_id, created_at, run_date, status, symbol, uic, asset_type
+                ) VALUES ('signal-1', 'run-1', '{now}', '{today}', 'ok', 'ALK-B:xcse', 19782, 'Stock')"
+            ),
+            format!(
+                "INSERT INTO decision_reports (id, created_at, status, report_json)
+                 VALUES (1, '{now}', 'completed', '{}')",
+                json!({"symbol_sentiment": [
+                    {"symbol": "ALK-B:xcse", "sentiment": "HOLD", "confidence": 60}
+                ]})
+            ),
+        ] {
+            sqlx::query(&statement)
+                .execute(&state.pool)
+                .await
+                .expect("seed watchlist test database");
+        }
+
+        let payload = state
+            .watchlists_payload()
+            .await
+            .expect("build watchlists payload");
+        let all = payload["categories"]
+            .as_array()
+            .and_then(|categories| categories.iter().find(|category| category["key"] == "all"))
+            .and_then(|category| category["items"].as_array())
+            .cloned()
+            .expect("all-monitored category");
+        let listed = |symbol: &str| {
+            all.iter()
+                .filter(|item| item["symbol"] == symbol)
+                .collect::<Vec<_>>()
+        };
+
+        let amgn = listed("AMGN:xnas");
+        assert_eq!(amgn.len(), 1, "an exposure-only holding is listed once");
+        assert_eq!(amgn[0]["quantity"], json!(2.0));
+        assert_eq!(amgn[0]["instrument_name"], "AMGN");
+        assert!(amgn[0].get("uic").is_none());
+
+        assert!(listed("ALKb:xcse").is_empty(), "{all:#?}");
+        let alk = listed("ALK-B:xcse");
+        assert_eq!(alk.len(), 1, "one held instrument, one entry: {all:#?}");
+        assert_eq!(
+            alk[0]["quantity"],
+            json!(28.0),
+            "the entry keeps the holding"
+        );
+        assert_eq!(alk[0]["instrument_name"], "ALK-B");
+        assert_eq!(alk[0]["decision"]["sentiment"], "HOLD");
+
+        assert_eq!(listed("NVDA:xnas").len(), 1);
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn a_held_instrument_takes_one_system_spelling_and_no_other() {
+        let broker = [
+            json!({"symbol": "ALKb:xcse", "uic": 19782, "asset_type": "Stock"}),
+            json!({"symbol": "NOVOb:xcse", "uic": 15629, "asset_type": "Stock"}),
+            json!({"symbol": "COST:xnas", "uic": 501, "asset_type": "Stock"}),
+        ];
+        let indicators = [
+            json!({"symbol": "ALK-B:xcse", "uic": 19782, "asset_type": "Stock"}),
+            json!({"symbol": "ALK_B:xcse", "uic": 19782, "asset_type": "Stock"}),
+            // Same Uic, different asset type: a different instrument.
+            json!({"symbol": "NOVO-B:xcse", "uic": 15629, "asset_type": "CfdOnStock"}),
+            // An analysis alias resolving to a held instrument whose Saxo
+            // spelling is already the configured one.
+            json!({"symbol": "COST:xnys", "uic": 501, "asset_type": "Stock"}),
+        ];
+        let configured = ["COST:xnas".to_string()];
+        let mut members = WatchlistMembers::new(&broker, &indicators, &configured);
+        let mut monitored = Vec::new();
+        let mut admit = |symbol: &str| {
+            members.admit(
+                &mut monitored,
+                symbol,
+                || json!({"symbol": symbol, "instrument_name": "broker description"}),
+            )
+        };
+
+        assert!(admit("ALKb:xcse"));
+        assert!(admit("NOVOb:xcse"));
+        assert!(admit("COST:xnas"));
+        assert!(!admit("ALKb:xcse"));
+        assert!(
+            !admit("ALK-B:xcse"),
+            "the system spelling renames the entry"
+        );
+        assert!(!admit("alk-b:XCSE"));
+        assert!(
+            admit("ALK_B:xcse"),
+            "a second spelling stays keyed by symbol"
+        );
+        assert!(admit("NOVO-B:xcse"));
+        assert!(admit("COST:xnys"), "a configured spelling is never renamed");
+
+        let symbols = monitored
+            .iter()
+            .map(|item| item["symbol"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            symbols,
+            [
+                "ALK-B:xcse",
+                "NOVOb:xcse",
+                "COST:xnas",
+                "ALK_B:xcse",
+                "NOVO-B:xcse",
+                "COST:xnys"
+            ]
+        );
+        assert_eq!(monitored[0]["instrument_name"], "broker description");
     }
 
     #[test]
