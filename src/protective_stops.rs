@@ -21,7 +21,7 @@ use tracing::{info, warn};
 use crate::{
     api::{StopPlacementOutcome, place_one_protective_stop},
     config::yaml_f64,
-    db::value_f64,
+    db::{value_f64, value_i64},
     saxo_order::cancel_protective_stop_for_replacement,
     state::AppState,
 };
@@ -208,11 +208,20 @@ fn usable_stop_price(candidate: f64, close: f64) -> Option<f64> {
     (candidate.is_finite() && candidate > 0.0 && candidate < close).then_some(candidate)
 }
 
+/// Saxo's identity for an instrument. A `Uic` alone is not enough: Saxo only
+/// guarantees it unique within an asset type, and a close borrowed from a
+/// different instrument would put the stop at a meaningless level.
+fn instrument_key(row: &JsonValue) -> Option<(i64, String)> {
+    let uic = value_i64(row, "uic");
+    let asset_type = row_text(row, "asset_type").trim().to_ascii_uppercase();
+    (uic > 0 && !asset_type.is_empty()).then_some((uic, asset_type))
+}
+
 /// Reads the desired-versus-actual picture for every held position.
 async fn stop_targets(state: &AppState) -> anyhow::Result<Vec<StopTarget>> {
     let positions = state
         .select_json(
-            "SELECT symbol, quantity FROM broker_position_snapshots
+            "SELECT symbol, quantity, uic, asset_type FROM broker_position_snapshots
              WHERE quantity > 0 ORDER BY symbol ASC",
         )
         .await?;
@@ -233,7 +242,7 @@ async fn stop_targets(state: &AppState) -> anyhow::Result<Vec<StopTarget>> {
         .await?;
     let indicators = state
         .select_json(
-            "SELECT symbol, close, atr14 FROM daily_indicator_signals
+            "SELECT symbol, uic, asset_type, close, atr14 FROM daily_indicator_signals
              WHERE close IS NOT NULL AND atr14 IS NOT NULL
              ORDER BY run_date DESC, id DESC LIMIT 600",
         )
@@ -248,8 +257,21 @@ async fn stop_targets(state: &AppState) -> anyhow::Result<Vec<StopTarget>> {
             continue;
         }
         let upper = symbol.to_ascii_uppercase();
-        // Rows arrive newest-first, so the first match per symbol wins.
-        let indicator = indicators.iter().find(|row| key(row) == upper);
+        // The system buys under its own symbol (`ALK-B:xcse`) and Saxo reports
+        // the holding under its compact one (`ALKb:xcse`), so on a position's
+        // first day the only indicator row carries the system symbol. Match the
+        // instrument first and the symbol second. Rows arrive newest-first, so
+        // the first match wins.
+        let indicator = instrument_key(position)
+            .and_then(|instrument| {
+                indicators
+                    .iter()
+                    .find(|row| instrument_key(row).as_ref() == Some(&instrument))
+            })
+            .or_else(|| indicators.iter().find(|row| key(row) == upper));
+        // Resting stops stay matched on the broker symbol. A stop can only be
+        // placed against the broker-held position, which Saxo keys by that
+        // symbol, so every protective stop is recorded under it.
         let stops = resting
             .iter()
             .filter(|row| key(row) == upper)
@@ -649,6 +671,124 @@ mod tests {
             decide_stop_action(&target(0.4, None, 500.0, 10.0), &policy()),
             StopAction::Hold {
                 reason: "no_whole_share_position"
+            }
+        );
+    }
+
+    /// Mirrors 2026-10-23: ALK-B was bought under the system symbol and Saxo
+    /// holds it as `ALKb:xcse`; AMBU-B is held as `AMBUb:xcse` with a resting
+    /// stop recorded under that symbol and indicators only under `AMBU-B:xcse`.
+    async fn sweep_state() -> AppState {
+        use std::{path::PathBuf, sync::Once};
+
+        use sqlx::any::AnyPoolOptions;
+
+        static INSTALL_DRIVERS: Once = Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sweep test database");
+        for statement in [
+            "CREATE TABLE broker_position_snapshots (
+                symbol TEXT PRIMARY KEY, uic INTEGER, asset_type TEXT, quantity REAL NOT NULL
+            )",
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY, symbol TEXT, action TEXT, status TEXT,
+                strategy_type TEXT, quantity REAL, stop_price_local REAL, broker_order_id TEXT
+            )",
+            "CREATE TABLE daily_indicator_signals (
+                id TEXT PRIMARY KEY, run_date TEXT NOT NULL, symbol TEXT NOT NULL,
+                uic BIGINT, asset_type TEXT, close DOUBLE PRECISION, atr14 DOUBLE PRECISION
+            )",
+            "INSERT INTO broker_position_snapshots (symbol, uic, asset_type, quantity) VALUES
+                ('ALKb:xcse', 19782, 'Stock', 28),
+                ('AMBUb:xcse', 15254, 'Stock', 95),
+                ('NOVOb:xcse', 15629, 'Stock', 10),
+                ('AMD:xnas', NULL, NULL, 7)",
+            "INSERT INTO execution_orders
+                (id, symbol, action, status, strategy_type, quantity, stop_price_local, broker_order_id)
+             VALUES (773, 'AMBUb:xcse', 'SELL', 'broker_working', 'protective_stop', 95, 77.0, '5200')",
+            "INSERT INTO daily_indicator_signals (id, run_date, symbol, uic, asset_type, close, atr14) VALUES
+                ('a', '2026-10-22', 'ALK-B:xcse', 19782, 'Stock', 240.0, 6.0),
+                ('b', '2026-10-22', 'AMBU-B:xcse', 15254, 'Stock', 80.0, 2.0),
+                ('c', '2026-10-22', 'NOVO-B:xcse', 15629, 'CfdOnStock', 400.0, 10.0),
+                ('d', '2026-10-22', 'AMD:xnas', NULL, NULL, 500.0, 10.0)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("seed sweep test database");
+        }
+        AppState {
+            config_path: PathBuf::from("protective-stop-sweep-test.yaml"),
+            config: serde_yaml::from_str("saxo:\n  environment: sim\n")
+                .expect("parse sweep test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
+
+    async fn sweep_target(symbol: &str) -> StopTarget {
+        stop_targets(&sweep_state().await)
+            .await
+            .expect("read stop targets")
+            .into_iter()
+            .find(|target| target.symbol == symbol)
+            .expect("held position becomes a stop target")
+    }
+
+    #[tokio::test]
+    async fn a_position_held_under_its_saxo_symbol_is_priced_by_its_instrument() {
+        let target = sweep_target("ALKb:xcse").await;
+        assert_eq!((target.close, target.atr14), (240.0, 6.0));
+        assert_eq!(
+            decide_stop_action(&target, &policy()),
+            StopAction::Place {
+                quantity: 28.0,
+                stop_price: 228.0,
+                reason: "position_has_no_resting_stop"
+            },
+            "the stop is placed on the first day, not after the nightly indicator run"
+        );
+        // A position without instrument metadata still matches on symbol.
+        assert_eq!(
+            decide_stop_action(&sweep_target("AMD:xnas").await, &policy()),
+            StopAction::Place {
+                quantity: 7.0,
+                stop_price: 480.0,
+                reason: "position_has_no_resting_stop"
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_position_with_a_resting_stop_is_not_given_a_second_one() {
+        let target = sweep_target("AMBUb:xcse").await;
+        assert_eq!(
+            target
+                .existing
+                .as_ref()
+                .map(|stop| stop.broker_order_id.as_str()),
+            Some("5200"),
+            "the stop recorded under the broker symbol is found"
+        );
+        // Trail is 80 - 1.25*2 = 77.5, within the 0.5 ratchet step of 77.
+        assert_eq!(
+            decide_stop_action(&target, &policy()),
+            StopAction::Hold {
+                reason: "resting_stop_matches_position_and_level"
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shared_uic_in_another_asset_type_is_not_borrowed() {
+        assert_eq!(
+            decide_stop_action(&sweep_target("NOVOb:xcse").await, &policy()),
+            StopAction::Hold {
+                reason: "no_usable_close"
             }
         );
     }

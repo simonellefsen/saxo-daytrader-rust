@@ -3372,3 +3372,16 @@ broker mutation was added.
 - **Tests.**
   - One sends to a closed local port with a fake key in the query. It asserts the raw error prints the key (the leak) and the stripped error does not, in display, alternate and debug form.
   - A guard reads the five source files and fails if any `.send()` there does not strip its URL.
+
+## [2026-10-23] Protective stops | A position held under Saxo's symbol is priced by its instrument
+
+- **Found.** ALK-B and COLO-B were bought at 08:55Z (`execution_orders` 780, 781) and held unprotected all session. The sweep reads positions from `broker_position_snapshots`, where Saxo names them `ALKb:xcse` and `COLOb:xcse`. It then looked up close and ATR by that symbol. The indicator rows are stored as `ALK-B:xcse` and `COLO-B:xcse`, so every cycle held with `no_usable_close`.
+  - AMBU-B (bought 2026-10-20) waited about 22 hours for the same reason. It recovered only because the nightly indicator run also writes a row under the broker symbol of a held position.
+  - Across 33 October BUY fills, these three are the only ones whose first stop took longer than about 20 minutes.
+- **Fix.** `protective_stops::stop_targets` matches the indicator row on Saxo's instrument identity, `uic` plus `asset_type`, and falls back to the symbol. Both tables already carry the two columns.
+  - `uic` alone is not enough: Saxo guarantees it unique only within an asset type.
+  - This was chosen over mapping through `lookup_instrument`, which calls `/ref/v1/instruments` per symbol. The sweep's read stays a pure database read.
+- **No second stop.** Resting stops stay matched on the broker symbol. A stop can only be placed against the broker-held position, which `protective_stop_sim_payload` finds by Saxo's display symbol, so every protective stop is recorded under it. On 2026-10-23 every `broker_working` stop matched a held broker symbol; AMBUb's is under `AMBUb:xcse`.
+- **Live read before deploy.** All 24 held positions carry `uic` and `asset_type`. Only ALKb and COLOb get a different indicator row, and each now gets a `Place`: 28 shares at about 228.65 and 14 at about 458.82, before tick normalisation. The other 22 see the same close and ATR as before. XCSE was closed when this was deployed, so the first placement is due at the next session open.
+- **Tests.** Three in `protective_stops`, against in-memory SQLite. A broker symbol that differs from its indicator symbol gets a `Place`. A position with a resting stop under the broker symbol gets no second `Place`. A shared `uic` in another asset type is not borrowed.
+- **Same mismatch, not fixed here:** see [urgent-todo](urgent-todo.md) U18. A SELL decision for `ALK-B:xcse` sees zero holdings.
