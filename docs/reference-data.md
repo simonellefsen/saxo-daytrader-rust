@@ -49,10 +49,17 @@ has traded, then the rest of the watchlist. The report-date backfill of about
   earnings data is US-listed only. Non-US holdings show as `Unprofiled`.
 - Saxo appends `_NEW` to a relisted symbol (`SHOP_NEW:xnas`); the providers
   get the bare ticker.
-- The trading-schedule response shape was not available in the documentation
-  copy at build time. The parser reads `StartTime`, `EndTime` and `State` from
-  `Sessions`, `TradingSessions` or `Data`; an answer with none is stored as
-  `no_sessions`.
+- Saxo's trading schedule reaches only a session or two ahead. The first
+  read, on Saturday 2026-10-24, covered Friday's close through Tuesday
+  morning on every exchange. A holiday is visible the day before at best. An
+  early close is judged against `exchange_session_days`: one row per exchange
+  per complete trading day, summed over its regular segments (Xetra splits
+  its day around a midday auction), kept across reads. With fewer than three
+  stored days no early close is claimed, and a day the read ends inside is
+  left out.
+- Responses carry `Sessions` with `StartTime`, `EndTime` and `State`; the
+  regular state is `AutomatedTrading`. The first read returned 30 of 30
+  instruments on the SIM account.
 
 ## The earnings evaluation
 

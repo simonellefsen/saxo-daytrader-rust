@@ -57,7 +57,8 @@ pub(crate) struct Session {
 }
 
 pub fn create_schema_sql() -> &'static [&'static str] {
-    &["CREATE TABLE IF NOT EXISTS instrument_trading_schedules (
+    &[
+        "CREATE TABLE IF NOT EXISTS instrument_trading_schedules (
         symbol TEXT PRIMARY KEY,
         exchange TEXT NOT NULL,
         uic BIGINT,
@@ -67,7 +68,20 @@ pub fn create_schema_sql() -> &'static [&'static str] {
         time_zone_abbreviation TEXT,
         fetched_at TEXT NOT NULL,
         run_date TEXT NOT NULL
-    )"]
+    )",
+        // One row per exchange per complete trading day seen in a read. Saxo's
+        // schedule reaches only a session or two ahead, so an early close is
+        // judged against the days kept here, not against the window alone.
+        "CREATE TABLE IF NOT EXISTS exchange_session_days (
+        exchange TEXT NOT NULL,
+        session_date TEXT NOT NULL,
+        regular_minutes INTEGER NOT NULL,
+        first_open TEXT NOT NULL,
+        last_close TEXT NOT NULL,
+        run_date TEXT NOT NULL,
+        PRIMARY KEY (exchange, session_date)
+    )",
+    ]
 }
 
 fn trading_schedule_config(state: &AppState) -> TradingScheduleConfig {
@@ -263,6 +277,7 @@ pub async fn run_trading_schedule_cycle(state: &AppState) -> Result<JsonValue> {
     let targets = schedule_targets(&held, &universe, config.max_instruments);
     let fetched_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut by_status = BTreeMap::<String, usize>::new();
+    let mut fetched = BTreeMap::<String, Vec<(String, Vec<Session>)>>::new();
     for symbol in &targets {
         let (status, instrument, sessions, zone) =
             match resolve_instrument(state, &session, symbol).await {
@@ -303,6 +318,18 @@ pub async fn run_trading_schedule_cycle(state: &AppState) -> Result<JsonValue> {
             zone: &zone,
         };
         store_schedule(state, &stored, &fetched_at, run_date).await?;
+        if status == "ok" {
+            fetched
+                .entry(exchange_of(symbol))
+                .or_default()
+                .push((symbol.clone(), sessions));
+        }
+    }
+    let mut days_stored = 0usize;
+    for (exchange, instruments) in &fetched {
+        let days = complete_session_days(instruments);
+        store_session_days(state, exchange, &days, run_date).await?;
+        days_stored += days.len();
     }
     info!(
         instruments = targets.len(),
@@ -314,6 +341,7 @@ pub async fn run_trading_schedule_cycle(state: &AppState) -> Result<JsonValue> {
         "run_date": run_date.to_string(),
         "instruments": targets.len(),
         "by_status": by_status,
+        "session_days_stored": days_stored,
         "scope": "read_only_reference_data",
     }))
 }
@@ -381,44 +409,135 @@ fn regular(sessions: &[Session]) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
         .collect()
 }
 
-/// One exchange's schedule from the instruments read on it.
-pub(crate) fn exchange_schedule(
-    exchange: &str,
-    instruments: &[(String, Vec<Session>)],
-    now: DateTime<Utc>,
-) -> ExchangeTradingSchedulePayload {
+/// The regular sessions most of an exchange's instruments share. Ties go to
+/// the longer schedule, then to the earlier one, so the choice is stable.
+fn usual_schedule(instruments: &[(String, Vec<Session>)]) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
     let mut counts = HashMap::<Vec<(DateTime<Utc>, DateTime<Utc>)>, usize>::new();
     for (_, sessions) in instruments {
         *counts.entry(regular(sessions)).or_default() += 1;
     }
-    let usual = counts
-        .iter()
+    counts
+        .into_iter()
         .max_by(|left, right| {
             left.1
-                .cmp(right.1)
-                .then(right.0.len().cmp(&left.0.len()).reverse())
+                .cmp(&right.1)
+                .then(left.0.len().cmp(&right.0.len()))
+                .then(right.0.cmp(&left.0))
         })
-        .map(|(sessions, _)| sessions.clone())
-        .unwrap_or_default();
+        .map(|(sessions, _)| sessions)
+        .unwrap_or_default()
+}
+
+/// One exchange day: its regular trading minutes, opening and close.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SessionDay {
+    pub date: NaiveDate,
+    pub minutes: i64,
+    pub first_open: DateTime<Utc>,
+    pub last_close: DateTime<Utc>,
+}
+
+/// The exchange's trading days in a read, each summed over its regular
+/// segments (Xetra, for one, splits its day around a midday auction).
+///
+/// A day counts only when the read continues past its last regular segment:
+/// the window can end mid-day, and that day's minutes would read as an early
+/// close.
+pub(crate) fn complete_session_days(instruments: &[(String, Vec<Session>)]) -> Vec<SessionDay> {
+    let usual = usual_schedule(instruments);
+    let window_end = instruments
+        .iter()
+        .flat_map(|(_, sessions)| sessions.iter().map(|session| session.end))
+        .max();
+    let mut days = BTreeMap::<NaiveDate, SessionDay>::new();
+    for (start, end) in &usual {
+        let day = days.entry(start.date_naive()).or_insert(SessionDay {
+            date: start.date_naive(),
+            minutes: 0,
+            first_open: *start,
+            last_close: *end,
+        });
+        day.minutes += (*end - *start).num_minutes();
+        day.first_open = day.first_open.min(*start);
+        day.last_close = day.last_close.max(*end);
+    }
+    days.into_values()
+        .filter(|day| window_end.is_some_and(|window_end| window_end > day.last_close))
+        .collect()
+}
+
+fn median(values: &[i64]) -> Option<i64> {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted.get(sorted.len() / 2).copied()
+}
+
+async fn store_session_days(
+    state: &AppState,
+    exchange: &str,
+    days: &[SessionDay],
+    run_date: NaiveDate,
+) -> Result<()> {
+    let stamp = |time: DateTime<Utc>| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    for day in days {
+        sqlx::query(&format!(
+            "INSERT INTO exchange_session_days (
+                exchange, session_date, regular_minutes, first_open, last_close, run_date
+             ) VALUES ('{}', '{}', {}, '{}', '{}', '{}')
+             ON CONFLICT(exchange, session_date) DO UPDATE SET
+                regular_minutes = excluded.regular_minutes,
+                first_open = excluded.first_open,
+                last_close = excluded.last_close,
+                run_date = excluded.run_date",
+            sql_escape(exchange),
+            day.date,
+            day.minutes,
+            stamp(day.first_open),
+            stamp(day.last_close),
+            run_date,
+        ))
+        .execute(&state.pool)
+        .await
+        .context("storing an exchange session day")?;
+    }
+    Ok(())
+}
+
+/// One exchange's schedule from the instruments read on it.
+///
+/// `history_minutes` are the regular minutes of the exchange's stored days.
+/// Their median is the usual day; an upcoming complete day at least
+/// `EARLY_CLOSE_MINUTES` shorter is an early close. With fewer than three
+/// stored days no early close is claimed.
+pub(crate) fn exchange_schedule(
+    exchange: &str,
+    instruments: &[(String, Vec<Session>)],
+    history_minutes: &[i64],
+    now: DateTime<Utc>,
+) -> ExchangeTradingSchedulePayload {
+    let usual = usual_schedule(instruments);
     let mut differing = instruments
         .iter()
         .filter(|(_, sessions)| regular(sessions) != usual)
         .map(|(symbol, _)| symbol.clone())
         .collect::<Vec<_>>();
     differing.sort();
-    let typical = usual
-        .iter()
-        .map(|(start, end)| (*end - *start).num_minutes())
-        .max()
-        .unwrap_or(0);
-    let early_closes = usual
-        .iter()
-        .filter(|(start, end)| typical - (*end - *start).num_minutes() >= EARLY_CLOSE_MINUTES)
-        .map(|(start, end)| ScheduleEarlyClosePayload {
-            date: start.date_naive().to_string(),
-            closes_at: end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            minutes: (*end - *start).num_minutes(),
-            typical_minutes: typical,
+    let typical = (history_minutes.len() >= 3)
+        .then(|| median(history_minutes))
+        .flatten();
+    let early_closes = complete_session_days(instruments)
+        .into_iter()
+        .filter(|day| day.date >= now.date_naive())
+        .filter_map(|day| {
+            let typical = typical?;
+            (typical - day.minutes >= EARLY_CLOSE_MINUTES).then(|| ScheduleEarlyClosePayload {
+                date: day.date.to_string(),
+                closes_at: day
+                    .last_close
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                minutes: day.minutes,
+                typical_minutes: typical,
+            })
         })
         .collect();
     let trading_days = usual
@@ -484,6 +603,22 @@ pub(crate) async fn trading_schedule_payload(state: &AppState) -> Result<Trading
         }
     }
     let now = Utc::now();
+    let cutoff = (now - Duration::days(60)).date_naive();
+    let mut history = HashMap::<String, Vec<i64>>::new();
+    for row in state
+        .select_json(&format!(
+            "SELECT exchange, regular_minutes FROM exchange_session_days
+             WHERE session_date >= '{cutoff}'"
+        ))
+        .await?
+    {
+        if let Some(minutes) = row.get("regular_minutes").and_then(JsonValue::as_i64) {
+            history
+                .entry(json_text(&row, "exchange"))
+                .or_default()
+                .push(minutes);
+        }
+    }
     Ok(TradingSchedulePayload {
         generated_at: now.to_rfc3339(),
         latest_run_date: rows.iter().map(|row| json_text(row, "run_date")).max(),
@@ -491,7 +626,14 @@ pub(crate) async fn trading_schedule_payload(state: &AppState) -> Result<Trading
         by_status,
         exchanges: by_exchange
             .iter()
-            .map(|(exchange, instruments)| exchange_schedule(exchange, instruments, now))
+            .map(|(exchange, instruments)| {
+                exchange_schedule(
+                    exchange,
+                    instruments,
+                    history.get(exchange).map(Vec::as_slice).unwrap_or_default(),
+                    now,
+                )
+            })
             .collect(),
         caveat: "Read-only. Market-open decisions, the Trading Manager and the protective-stop sweep still use Saxo's exchange-level sessions.".to_string(),
         status: None,
@@ -567,6 +709,7 @@ mod tests {
                 "2026-11-27T18:00:00Z",
                 REGULAR_STATE,
             ),
+            session("2026-11-27T18:00:00Z", "2026-11-30T14:30:00Z", "Closed"),
         ];
         let odd = vec![session(
             "2026-11-24T14:30:00Z",
@@ -578,7 +721,10 @@ mod tests {
             ("DIS:xnys".to_string(), week),
             ("SPCX:xnys".to_string(), odd),
         ];
-        let schedule = exchange_schedule("XNYS", &instruments, at("2026-11-25T22:00:00Z"));
+        // The stored days include Friday's own short day.
+        let history = [390, 390, 390, 210];
+        let schedule =
+            exchange_schedule("XNYS", &instruments, &history, at("2026-11-25T22:00:00Z"));
         assert_eq!(schedule.instruments, 3);
         assert_eq!(schedule.closed_weekdays, ["2026-11-26"]);
         assert_eq!(schedule.early_closes.len(), 1);
@@ -653,6 +799,52 @@ mod tests {
         let view = trading_schedule_payload(&state).await.unwrap();
         assert!(view.exchanges.is_empty());
         assert_eq!(view.by_status.get("http_503"), Some(&1));
+    }
+
+    /// Xetra's two segments make one day, and the day a read ends inside is
+    /// left out rather than read as an early close.
+    #[test]
+    fn split_days_are_summed_and_a_day_the_read_ends_in_is_dropped() {
+        let xetra = vec![
+            session(
+                "2026-10-26T07:00:00Z",
+                "2026-10-26T08:00:00Z",
+                "OpeningAuction",
+            ),
+            session(
+                "2026-10-26T08:00:00Z",
+                "2026-10-26T12:00:00Z",
+                REGULAR_STATE,
+            ),
+            session("2026-10-26T12:00:00Z", "2026-10-26T12:02:00Z", "Auction"),
+            session(
+                "2026-10-26T12:02:00Z",
+                "2026-10-26T16:30:00Z",
+                REGULAR_STATE,
+            ),
+            session("2026-10-26T16:30:00Z", "2026-10-27T07:00:00Z", "Closed"),
+            session(
+                "2026-10-27T08:00:00Z",
+                "2026-10-27T12:00:00Z",
+                REGULAR_STATE,
+            ),
+        ];
+        let instruments = vec![("SAPG:xetr".to_string(), xetra)];
+        let days = complete_session_days(&instruments);
+        assert_eq!(days.len(), 1, "the read ends inside 27 October");
+        assert_eq!(days[0].minutes, 240 + 268);
+        assert_eq!(days[0].last_close, at("2026-10-26T16:30:00Z"));
+
+        let schedule = exchange_schedule(
+            "XETR",
+            &instruments,
+            &[508, 508],
+            at("2026-10-24T09:00:00Z"),
+        );
+        assert!(
+            schedule.early_closes.is_empty(),
+            "two stored days are too few to judge"
+        );
     }
 
     #[test]
