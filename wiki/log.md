@@ -3482,3 +3482,12 @@ Closes the BUY-side gap the U18 entry left open ("Not changed").
 - **Tests.** Two new ones in `trading_manager`, on in-memory SQLite through `PositionExposure::load`. Both fail with matching by spelling only.
   - A BUY for `ALK-B:xcse` sees the 6,860 DKK holding: the weight cap refuses it, the holding cap treats it as an add, and a CFD sharing NOVO-B's uic is not joined.
   - A reservation and its holding under two spellings take one slot (2, not 3), `reserve_buy` merges into it, and a new symbol fits at 2 of 3.
+
+## [2026-10-24] Evaluation | Month review: where the September–October loss came from
+
+- **Why.** Simon asked why the book lost 3.7% in a month despite Markov, trend, support risk and technical inputs.
+- **What.** A read-only review of 2026-09-23 to 2026-10-24, filed under [T2](todo.md#t2--establish-whether-the-strategy-has-an-edge) with a [page](https://claude.ai/artifact/HGu6tDNJrj3EZAxgmFG9uH) (private to Simon). Sources: `portfolio_value_history`, `trade_ledger`, executed `execution_orders`, `daily_price_bars` (204 stocks), `daily_indicator_signals`, `markov_asset_signals`, `quiver_asset_signals`, `/api/performance` and `/api/evaluation/entries`.
+- **Headline.** −8,796 DKK against −2,082 for holding the starting book. Ten new US tech stocks lost 6,564. No decision input predicts the next session's region-relative return across the universe. The buys are recent winners, and the US buys trail the US universe at 10 sessions.
+- **One correction to an earlier reading.** The MDB gap on 2026-09-28 followed the CEO's departure, not an earnings report, so it is not evidence for an earnings blackout.
+- **New method, not yet in the runtime.** The universe-wide per-signal test (daily cross-sectional rank correlation with the region-relative forward return, dates sampled every h sessions) exists only as an ad hoc script. Making it a standing measurement is one of the options listed on the page.
+- No code or configuration changed.

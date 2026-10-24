@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - todo
   - maintained-by-llm
-updated: 2026-10-18
+updated: 2026-10-24
 ---
 
 # Daytrader Todo
@@ -84,6 +84,20 @@ Live record since the 2026-07-16 reset. **Restated 2026-09-03** from the realise
 - **Filters:** missed-trade shadows −3.0% (n=38) and Hermes counterfactuals −3.8% (n=30). The gates remove a pool that drifts down.
 
 The first follow-up is registered as [exit rules v1](experiments/2026-10-18-exit-rules-v1.md): six frozen exit rules replayed over every entry at `/api/evaluation/exits`, in-sample now and out-of-sample from 2026-10-18 onward.
+
+**Month review, 2026-10-24** ([page](https://claude.ai/artifact/HGu6tDNJrj3EZAxgmFG9uH), private to Simon). 2026-09-23 07:10Z to 2026-10-24: 237,337 → 228,541 DKK, −8,796 (−3.7%). Read-only and in-sample; every finding is a hypothesis.
+
+- **Where it went** (per stock: end value + sale proceeds − start value − purchase cost, commission included; sums exactly to the account change):
+  - the 19 positions held at the start, 18 of them stopped out at least once: −2,043;
+  - 10 new US tech and high-beta stocks (MDB, ARM, DDOG, SNOW, SPCX, SHOP, MSTR, INTC, MSFT, PLTR): −6,564;
+  - 20 other new stocks: −189.
+- **Against doing nothing.** Holding the 2026-09-23 book untouched would have lost 2,082. The universe's equal-weight close-to-close return was −0.7% (Denmark +5.4%, Europe −2.5%, US −1.1%); Nasdaq-100 proxy −5.0%. USD/DKK +2.2% helped (+2,548 FX on sales).
+- **Signals, universe-wide.** Per day, the rank correlation of each signal with the next session's return relative to the stock's region, over 204 stocks, 2026-06-01 to 09-03 and 09-04 to 10-23. Markov signed signal and state, confluence count, the technical gate, trend bias and support-break risk are all within noise of zero in both periods (|mean| ≤ 0.026). 80 of 116 buys since 07-16 scored exactly 5 confluences, so the count cannot rank. Quiver read −0.052 in the autumn period, interval excluding zero; with this many comparisons one such reading is expected by chance.
+- **What the stack selects.** Buys sit at the 81st percentile of their region's 20-session return, rose 3.9% in the 5 sessions before purchase, and filled about 0.3% above the open. In the summer period the prior 5-session return predicted underperformance (−0.059, interval excluding zero). Within the buys, the third furthest above SMA20 returned −3.1% over 10 sessions against +0.6% for the least stretched.
+- **US picks trail the US universe** by 2.3% at 10 sessions (since 07-16, n=50, interval −3.9% to −0.6%; entries cluster in time, so it is somewhat too narrow). The US took 152k of the month's 310k DKK of buying.
+- **MDB** (−2,457, 28% of the month) gapped 24% on 2026-09-28 past a 382.52 stop to 310.20. The drop followed the CEO's departure, not earnings (reported 2026-09-01), so an earnings blackout would not have caught it.
+- **Turnover.** 81 trades (583k DKK, 2.5× the book), every sale a stop, 13 of 38 stop sales followed by a re-buy. Commission 1,757 DKK; about 0.6% a round trip at ~7k DKK tickets.
+- **Not the problem this month.** After a stop sale the price moved +0.4% on average (interval −2.8% to +3.6%). Candidates the gates and Hermes rejected did as badly as the buys (missed trades −2%, n=24; Hermes-blocked −1%, n=19).
 
 **The payoff ratio is the number that matters, and it now has a mechanical explanation.** Every one of those 32 exits was a risk-reduction exit — 28 protective stops (−14,225 DKK) and 4 flattens (−7,073) — and **not one was a profit-taking exit**. Nothing in the runtime closes a position because it reached a target, so a win can only happen when a stop that trailed up gets hit. The nine wins are exactly that, which is why the average win is 481 DKK against an average loss of 1,114.
 
