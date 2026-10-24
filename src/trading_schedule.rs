@@ -167,8 +167,20 @@ fn sessions_json(sessions: &[Session]) -> String {
     .to_string()
 }
 
-fn sessions_from_stored(text: &str) -> Vec<Session> {
-    let payload = serde_json::from_str::<JsonValue>(text).unwrap_or(JsonValue::Null);
+/// The stored sessions of one row.
+///
+/// `row_to_json` decodes a `_json` column into JSON already, so this takes
+/// the decoded array; text is still accepted in case decoding was skipped.
+fn sessions_from_stored(value: Option<&JsonValue>) -> Vec<Session> {
+    let decoded;
+    let payload = match value {
+        Some(JsonValue::String(text)) => {
+            decoded = serde_json::from_str::<JsonValue>(text).unwrap_or(JsonValue::Null);
+            &decoded
+        }
+        Some(value) => value,
+        None => return Vec::new(),
+    };
     let time = |item: &JsonValue, key: &str| {
         item.get(key)
             .and_then(JsonValue::as_str)
@@ -280,39 +292,17 @@ pub async fn run_trading_schedule_cycle(state: &AppState) -> Result<JsonValue> {
                 }
             };
         *by_status.entry(status.clone()).or_default() += 1;
-        sqlx::query(&format!(
-            "INSERT INTO instrument_trading_schedules (
-                symbol, exchange, uic, asset_type, status, sessions_json, time_zone_abbreviation,
-                fetched_at, run_date
-             ) VALUES ('{}', '{}', {}, {}, '{}', {}, '{}', '{}', '{}')
-             ON CONFLICT(symbol) DO UPDATE SET
-                exchange = excluded.exchange,
-                uic = excluded.uic,
-                asset_type = excluded.asset_type,
-                status = excluded.status,
-                sessions_json = COALESCE(excluded.sessions_json, instrument_trading_schedules.sessions_json),
-                time_zone_abbreviation = excluded.time_zone_abbreviation,
-                fetched_at = excluded.fetched_at,
-                run_date = excluded.run_date",
-            sql_escape(symbol),
-            sql_escape(&exchange_of(symbol)),
-            instrument.as_ref().map_or_else(|| "NULL".to_string(), |i| i.uic.to_string()),
-            instrument
+        let stored = StoredSchedule {
+            symbol,
+            uic: instrument.as_ref().map(|instrument| instrument.uic),
+            asset_type: instrument
                 .as_ref()
-                .map_or_else(|| "NULL".to_string(), |i| format!("'{}'", sql_escape(&i.asset_type))),
-            sql_escape(&status),
-            if sessions.is_empty() {
-                "NULL".to_string()
-            } else {
-                format!("'{}'", sql_escape(&sessions_json(&sessions)))
-            },
-            sql_escape(&zone),
-            fetched_at,
-            run_date,
-        ))
-        .execute(&state.pool)
-        .await
-        .context("storing a Saxo trading schedule")?;
+                .map(|instrument| instrument.asset_type.as_str()),
+            status: &status,
+            sessions: &sessions,
+            zone: &zone,
+        };
+        store_schedule(state, &stored, &fetched_at, run_date).await?;
     }
     info!(
         instruments = targets.len(),
@@ -326,6 +316,61 @@ pub async fn run_trading_schedule_cycle(state: &AppState) -> Result<JsonValue> {
         "by_status": by_status,
         "scope": "read_only_reference_data",
     }))
+}
+
+/// One instrument's read, as stored.
+pub(crate) struct StoredSchedule<'a> {
+    pub symbol: &'a str,
+    pub uic: Option<i64>,
+    pub asset_type: Option<&'a str>,
+    pub status: &'a str,
+    pub sessions: &'a [Session],
+    pub zone: &'a str,
+}
+
+/// Upserts one instrument's read. A failed read keeps the sessions stored
+/// before it, under the failure's status, so the view never shows them as
+/// current.
+pub(crate) async fn store_schedule(
+    state: &AppState,
+    stored: &StoredSchedule<'_>,
+    fetched_at: &str,
+    run_date: NaiveDate,
+) -> Result<()> {
+    sqlx::query(&format!(
+        "INSERT INTO instrument_trading_schedules (
+            symbol, exchange, uic, asset_type, status, sessions_json, time_zone_abbreviation,
+            fetched_at, run_date
+         ) VALUES ('{}', '{}', {}, {}, '{}', {}, '{}', '{}', '{}')
+         ON CONFLICT(symbol) DO UPDATE SET
+            exchange = excluded.exchange,
+            uic = excluded.uic,
+            asset_type = excluded.asset_type,
+            status = excluded.status,
+            sessions_json = COALESCE(excluded.sessions_json, instrument_trading_schedules.sessions_json),
+            time_zone_abbreviation = excluded.time_zone_abbreviation,
+            fetched_at = excluded.fetched_at,
+            run_date = excluded.run_date",
+        sql_escape(stored.symbol),
+        sql_escape(&exchange_of(stored.symbol)),
+        stored.uic.map_or_else(|| "NULL".to_string(), |uic| uic.to_string()),
+        stored
+            .asset_type
+            .map_or_else(|| "NULL".to_string(), |asset_type| format!("'{}'", sql_escape(asset_type))),
+        sql_escape(stored.status),
+        if stored.sessions.is_empty() {
+            "NULL".to_string()
+        } else {
+            format!("'{}'", sql_escape(&sessions_json(stored.sessions)))
+        },
+        sql_escape(stored.zone),
+        sql_escape(fetched_at),
+        run_date,
+    ))
+    .execute(&state.pool)
+    .await
+    .context("storing a Saxo trading schedule")?;
+    Ok(())
 }
 
 fn regular(sessions: &[Session]) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
@@ -430,7 +475,7 @@ pub(crate) async fn trading_schedule_payload(state: &AppState) -> Result<Trading
     let mut by_exchange = BTreeMap::<String, Vec<(String, Vec<Session>)>>::new();
     for row in &rows {
         *by_status.entry(json_text(row, "status")).or_default() += 1;
-        let sessions = sessions_from_stored(&json_text(row, "sessions_json"));
+        let sessions = sessions_from_stored(row.get("sessions_json"));
         if json_text(row, "status") == "ok" && !sessions.is_empty() {
             by_exchange
                 .entry(json_text(row, "exchange"))
@@ -495,7 +540,10 @@ mod tests {
         let sessions = parse_sessions(&payload);
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].state, "Closed");
-        assert_eq!(sessions_from_stored(&sessions_json(&sessions)), sessions);
+        assert_eq!(
+            sessions_from_stored(Some(&JsonValue::String(sessions_json(&sessions)))),
+            sessions
+        );
     }
 
     /// Thanksgiving week on NYSE: closed Thursday, a 13:00 close on Friday,
@@ -542,6 +590,69 @@ mod tests {
             Some("2026-11-27T14:30:00Z")
         );
         assert_eq!(schedule.instruments_differing, ["SPCX:xnys"]);
+    }
+
+    /// The view reads what the refresh stored, through the same row decoding
+    /// the dashboard uses, and a later failed read hides the older sessions.
+    #[tokio::test]
+    async fn stored_schedules_reach_the_view_and_a_failed_read_hides_them() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory schedule database");
+        for sql in create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("create schedule table");
+        }
+        let state = AppState {
+            config_path: std::path::PathBuf::from("schedule-test.yaml"),
+            config: serde_yaml::Value::Null,
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+        let sessions = vec![
+            session(
+                "2099-11-24T14:30:00Z",
+                "2099-11-24T21:00:00Z",
+                REGULAR_STATE,
+            ),
+            session(
+                "2099-11-25T14:30:00Z",
+                "2099-11-25T21:00:00Z",
+                REGULAR_STATE,
+            ),
+        ];
+        let read = |status, sessions| StoredSchedule {
+            symbol: "XOM:xnys",
+            uic: Some(1),
+            asset_type: Some("Stock"),
+            status,
+            sessions,
+            zone: "EST",
+        };
+        let day = NaiveDate::from_ymd_opt(2099, 11, 24).unwrap();
+        store_schedule(&state, &read("ok", &sessions), "2099-11-24T05:30:00Z", day)
+            .await
+            .unwrap();
+        let view = trading_schedule_payload(&state).await.unwrap();
+        assert_eq!(view.exchanges.len(), 1);
+        assert_eq!(view.exchanges[0].exchange, "XNYS");
+        assert_eq!(
+            view.exchanges[0].next_regular_open.as_deref(),
+            Some("2099-11-24T14:30:00Z")
+        );
+
+        store_schedule(&state, &read("http_503", &[]), "2099-11-25T05:30:00Z", day)
+            .await
+            .unwrap();
+        let view = trading_schedule_payload(&state).await.unwrap();
+        assert!(view.exchanges.is_empty());
+        assert_eq!(view.by_status.get("http_503"), Some(&1));
     }
 
     #[test]
