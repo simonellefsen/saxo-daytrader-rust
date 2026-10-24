@@ -50,8 +50,9 @@ use crate::{
     read_model,
     saxo_error::classify_execution_error,
     saxo_order::{
-        cancel_sim_protective_stop_lifecycle_test, place_sim_protective_stop_lifecycle_test,
-        precheck_sim_protective_stop, protective_stop_lifecycle_error_is_state_unknown,
+        OrderEntry, cancel_sim_protective_stop_lifecycle_test,
+        place_sim_protective_stop_lifecycle_test, precheck_sim_protective_stop,
+        protective_stop_lifecycle_error_is_state_unknown,
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     scheduler_state::{scheduler_cycle_summaries_from_json, scheduler_status_summary_from_json},
@@ -770,8 +771,14 @@ async fn precheck_protective_stop(
         return redirect_to_app(&state, return_to).into_response();
     }
 
-    match precheck_sim_protective_stop(&state, &symbol, request.quantity, request.stop_price_local)
-        .await
+    match precheck_sim_protective_stop(
+        &state,
+        &symbol,
+        request.quantity,
+        request.stop_price_local,
+        OrderEntry::Manual,
+    )
+    .await
     {
         Ok(result) => {
             if let Err(err) = state
@@ -850,7 +857,7 @@ async fn place_protective_stop_lifecycle_test(
         .get("id")
         .and_then(JsonValue::as_i64)
         .unwrap_or_default();
-    match place_sim_protective_stop_lifecycle_test(&state, &prepared).await {
+    match place_sim_protective_stop_lifecycle_test(&state, &prepared, OrderEntry::Manual).await {
         Ok(result) => {
             let broker_order_id = result.get("broker_order_id").and_then(JsonValue::as_str);
             let status = if broker_order_id.is_some() {
@@ -1115,34 +1122,37 @@ impl StopPlacementOutcome {
 ///
 /// Shared by the operator batch and the automatic sweep so both run the same
 /// broker sequence and record the same audit trail. `source` is stored with the
-/// precheck so a stop can always be traced back to what asked for it.
+/// precheck so a stop can always be traced back to what asked for it; `entry`
+/// tells Saxo whether an operator confirmed it.
 pub(crate) async fn place_one_protective_stop(
     state: &AppState,
     symbol: &str,
     quantity: f64,
     stop_price: f64,
     source: &str,
+    entry: OrderEntry,
 ) -> StopPlacementOutcome {
-    let precheck = match precheck_sim_protective_stop(state, symbol, quantity, stop_price).await {
-        Ok(result) => result,
-        Err(err) => {
-            warn!(symbol, source, "protective-stop precheck failed: {err:#}");
-            let _ = state
-                .record_protective_stop_precheck(
-                    symbol,
-                    quantity,
-                    stop_price,
-                    "precheck_failed",
-                    &json!({
-                        "accepted": false,
-                        "source": source,
-                        "error": classify_execution_error("execution_failed", &err.to_string())
-                    }),
-                )
-                .await;
-            return StopPlacementOutcome::PrecheckFailed;
-        }
-    };
+    let precheck =
+        match precheck_sim_protective_stop(state, symbol, quantity, stop_price, entry).await {
+            Ok(result) => result,
+            Err(err) => {
+                warn!(symbol, source, "protective-stop precheck failed: {err:#}");
+                let _ = state
+                    .record_protective_stop_precheck(
+                        symbol,
+                        quantity,
+                        stop_price,
+                        "precheck_failed",
+                        &json!({
+                            "accepted": false,
+                            "source": source,
+                            "error": classify_execution_error("execution_failed", &err.to_string())
+                        }),
+                    )
+                    .await;
+                return StopPlacementOutcome::PrecheckFailed;
+            }
+        };
     let accepted = precheck
         .get("accepted")
         .and_then(JsonValue::as_bool)
@@ -1190,7 +1200,7 @@ pub(crate) async fn place_one_protective_stop(
         .get("id")
         .and_then(JsonValue::as_i64)
         .unwrap_or_default();
-    match place_sim_protective_stop_lifecycle_test(state, &prepared).await {
+    match place_sim_protective_stop_lifecycle_test(state, &prepared, entry).await {
         Ok(result) => {
             let broker_order_id = result
                 .get("broker_order_id")
@@ -1322,6 +1332,7 @@ async fn run_protective_stop_batch(state: Arc<AppState>, targets: Vec<(String, f
             quantity,
             stop_price,
             "operator_confirmed_batch",
+            OrderEntry::Manual,
         )
         .await
         {

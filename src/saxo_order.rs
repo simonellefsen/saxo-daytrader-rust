@@ -112,6 +112,22 @@ impl ExecutionQueueGate {
     }
 }
 
+/// Who sent an order to market, for Saxo's `ManualOrder` flag. Saxo counts an
+/// order as manual when a person entered it, or confirmed it before it went to
+/// market; one the runtime generates and routes on its own is automatic
+/// (Saxo Learn, "Order Placement").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderEntry {
+    Manual,
+    Automatic,
+}
+
+impl OrderEntry {
+    fn manual_order(self) -> bool {
+        self == Self::Manual
+    }
+}
+
 fn normalized_saxo_environment(environment: &str) -> Option<&'static str> {
     if environment.eq_ignore_ascii_case("sim") {
         Some("SIM")
@@ -291,6 +307,7 @@ pub async fn precheck_sim_protective_stop(
     symbol: &str,
     quantity: f64,
     stop_price_local: f64,
+    entry: OrderEntry,
 ) -> Result<JsonValue> {
     let symbol = symbol.trim();
     if symbol.is_empty() || symbol.len() > 80 {
@@ -309,6 +326,7 @@ pub async fn precheck_sim_protective_stop(
         stop_price_local,
         "protective_stop_sim_precheck",
         None,
+        entry,
     )
     .await?;
     let precheck = precheck_order(state, &session, &payload).await?;
@@ -325,12 +343,81 @@ pub async fn precheck_sim_protective_stop(
     }))
 }
 
+/// Operator probe for the `ManualOrder` flag: builds the payload the execution
+/// queue would send for one SIM order and runs Saxo's precheck twice, flagged
+/// automatic and then manual. It never calls the placement endpoint and writes
+/// no execution order.
+pub async fn precheck_sample_order(
+    state: &AppState,
+    symbol: &str,
+    action: &str,
+    quantity: f64,
+    limit_price_local: Option<f64>,
+) -> Result<JsonValue> {
+    let symbol = symbol.trim();
+    let action = action.trim().to_ascii_uppercase();
+    if action != "BUY" && action != "SELL" {
+        bail!("A sample precheck action must be BUY or SELL");
+    }
+    if !quantity.is_finite() || quantity < 1.0 || (quantity - quantity.round()).abs() > 1e-6 {
+        bail!("A sample precheck quantity must be a positive whole-share amount");
+    }
+    let session = protective_stop_sim_session(state, "sample_order_sim_precheck").await?;
+    let closing_position = if action == "SELL" {
+        let positions = broker_position_quantities(state, &session).await?;
+        let position = positions
+            .iter()
+            .find(|(broker_symbol, _)| broker_symbol.eq_ignore_ascii_case(symbol))
+            .map(|(_, position)| position.clone())
+            .ok_or_else(|| anyhow!("No broker-held position was found for {symbol}"))?;
+        Some(position)
+    } else {
+        None
+    };
+    let order = json!({
+        "id": 0,
+        "symbol": symbol,
+        "action": action,
+        "order_type": if limit_price_local.is_some() { "Limit" } else { "Market" },
+        "limit_price_local": limit_price_local,
+    });
+    let payload =
+        build_order_payload(state, &session, &order, quantity, closing_position.as_ref()).await?;
+    let mut prechecks = Vec::new();
+    for entry in [OrderEntry::Automatic, OrderEntry::Manual] {
+        if !prechecks.is_empty() {
+            sleep(Duration::from_millis(1_100)).await;
+        }
+        let mut variant = payload.clone();
+        variant["ManualOrder"] = json!(entry.manual_order());
+        prechecks.push(match precheck_order(state, &session, &variant).await {
+            Ok(precheck) => json!({
+                "manual_order": entry.manual_order(),
+                "accepted": true,
+                "precheck": sanitized_broker_activity(&precheck),
+            }),
+            Err(err) => json!({
+                "manual_order": entry.manual_order(),
+                "accepted": false,
+                "error": err.to_string(),
+            }),
+        });
+    }
+    Ok(json!({
+        "symbol": symbol,
+        "payload": sanitized_order_payload(&payload),
+        "prechecks": prechecks,
+        "safety": "sim_only_precheck_no_order_placement_or_execution_order"
+    }))
+}
+
 /// Places exactly one prechecked, operator-confirmed SIM GTC SELL Stop lifecycle
 /// test. This is deliberately excluded from the execution queue, scheduler, and
 /// Hermes: it exists solely to validate Saxo's broker-hosted stop lifecycle.
 pub async fn place_sim_protective_stop_lifecycle_test(
     state: &AppState,
     lifecycle_test: &JsonValue,
+    entry: OrderEntry,
 ) -> Result<JsonValue> {
     let symbol = json_text(lifecycle_test, "symbol")
         .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no symbol"))?;
@@ -353,6 +440,7 @@ pub async fn place_sim_protective_stop_lifecycle_test(
         stop_price_local,
         "protective_stop_sim_lifecycle_placement",
         Some(&external_reference),
+        entry,
     )
     .await?;
     let precheck = precheck_order(state, &session, &payload).await?;
@@ -473,6 +561,7 @@ async fn protective_stop_sim_payload(
     stop_price_local: f64,
     session_source: &str,
     external_reference: Option<&str>,
+    entry: OrderEntry,
 ) -> Result<(JsonValue, JsonValue, f64)> {
     let session = protective_stop_sim_session(state, session_source).await?;
     let broker_positions = broker_position_quantities(state, &session)
@@ -512,6 +601,7 @@ async fn protective_stop_sim_payload(
         quantity,
         normalized_stop_price,
         &order_type,
+        entry,
     );
     if let Some(external_reference) = external_reference {
         payload["ExternalReference"] =
@@ -545,13 +635,14 @@ fn protective_stop_precheck_payload(
     quantity: f64,
     stop_price_local: f64,
     order_type: &str,
+    entry: OrderEntry,
 ) -> JsonValue {
     json!({
         "AccountKey": account_key,
         "Amount": quantity as i64,
         "AssetType": instrument.asset_type,
         "BuySell": "Sell",
-        "ManualOrder": true,
+        "ManualOrder": entry.manual_order(),
         "OrderDuration": {"DurationType": "GoodTillCancel"},
         "OrderPrice": stop_price_local,
         "OrderType": order_type,
@@ -1909,7 +2000,9 @@ async fn build_order_payload(
         "AssetType": instrument.asset_type,
         "BuySell": if action == "BUY" { "Buy" } else { "Sell" },
         "ExternalReference": external_reference(value_i64(order, "id")),
-        "ManualOrder": true,
+        // The queue refuses to run while execution.require_approval_live is
+        // set, so nobody confirms these orders: to Saxo they are automatic.
+        "ManualOrder": false,
         "OrderDuration": {"DurationType": "DayOrder"},
         "OrderType": order_type,
         "Uic": instrument.uic
@@ -5197,6 +5290,7 @@ mod tests {
                 2.0,
                 95.5,
                 order_type,
+                OrderEntry::Automatic,
             );
             assert_eq!(payload["OrderType"], order_type);
             assert_eq!(payload["BuySell"], "Sell");
@@ -5204,6 +5298,52 @@ mod tests {
             // A protective stop must be a plain Stop: a StopLimit can trigger
             // and then fail to fill through a fast decline.
             assert!(payload.get("StopLimitPrice").is_none());
+        }
+    }
+
+    /// The queue only runs with approval switched off, so nobody confirms a
+    /// queued order before it goes to market.
+    #[tokio::test]
+    async fn queued_orders_are_flagged_automatic() {
+        let state = execution_order_test_state().await;
+        let session = json!({"account_key": "account-key"});
+        let order = json!({
+            "id": 7,
+            "symbol": "AAPL:xnas",
+            "action": "BUY",
+            "order_type": "Market",
+            "request_json": {"validation": {"status": "valid", "uic": 211, "asset_type": "Stock"}},
+        });
+
+        let payload = build_order_payload(&state, &session, &order, 3.0, None)
+            .await
+            .expect("build a market order from a reviewed instrument");
+
+        assert_eq!(payload["ManualOrder"], json!(false));
+        assert_eq!(payload["Uic"], json!(211));
+    }
+
+    /// Saxo's `ManualOrder` means a person entered or confirmed the order. The
+    /// automatic sweep places stops nobody confirmed; the operator batch does
+    /// not.
+    #[test]
+    fn protective_stop_payload_flags_who_sent_it() {
+        let instrument = SaxoInstrument {
+            uic: 12345,
+            asset_type: "Stock".to_string(),
+            exchange_id: "XNAS".to_string(),
+            description: "Example".to_string(),
+        };
+        for (entry, manual) in [(OrderEntry::Automatic, false), (OrderEntry::Manual, true)] {
+            let payload = protective_stop_precheck_payload(
+                "account-key".to_string(),
+                &instrument,
+                2.0,
+                95.5,
+                "StopIfTraded",
+                entry,
+            );
+            assert_eq!(payload["ManualOrder"], json!(manual));
         }
     }
 
@@ -5227,6 +5367,7 @@ mod tests {
             2.0,
             95.5,
             "StopIfTraded",
+            OrderEntry::Manual,
         );
 
         assert_eq!(payload["BuySell"], "Sell");
@@ -5255,6 +5396,7 @@ mod tests {
             2.0,
             95.5,
             "StopIfTraded",
+            OrderEntry::Manual,
         );
         payload["ExternalReference"] = json!("x".repeat(80).chars().take(50).collect::<String>());
         let sanitized = sanitized_order_payload(&payload);

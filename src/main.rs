@@ -94,7 +94,7 @@ mod xai_decision;
 
 use std::{env, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -102,7 +102,7 @@ use tracing_subscriber::EnvFilter;
 use crate::{
     api::router,
     mcp::run_mcp_http,
-    saxo_order::sync_saxo_broker_orders,
+    saxo_order::{precheck_sample_order, sync_saxo_broker_orders},
     scheduler::run_scheduler,
     shutdown::{ShutdownSignal, server_shutdown},
     state::AppState,
@@ -134,6 +134,24 @@ async fn main() -> Result<()> {
         info!("starting one-shot Saxo broker order sync");
         let state = AppState::load().await?;
         let result = sync_saxo_broker_orders(&state).await?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+    if let Some(index) = args.iter().position(|arg| arg == "--precheck-sample-order") {
+        // --precheck-sample-order SYMBOL BUY|SELL QUANTITY [LIMIT_PRICE]
+        let rest = &args[index + 1..];
+        let (Some(symbol), Some(action), Some(quantity)) = (rest.first(), rest.get(1), rest.get(2))
+        else {
+            bail!("usage: --precheck-sample-order SYMBOL BUY|SELL QUANTITY [LIMIT_PRICE]");
+        };
+        let quantity = quantity.parse::<f64>().context("parsing QUANTITY")?;
+        let limit_price = rest
+            .get(3)
+            .map(|price| price.parse::<f64>().context("parsing LIMIT_PRICE"))
+            .transpose()?;
+        info!("starting one-shot SIM sample-order precheck");
+        let state = AppState::load().await?;
+        let result = precheck_sample_order(&state, symbol, action, quantity, limit_price).await?;
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }

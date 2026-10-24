@@ -22,7 +22,7 @@ use crate::{
     api::{StopPlacementOutcome, place_one_protective_stop},
     config::yaml_f64,
     db::value_f64,
-    saxo_order::cancel_protective_stop_for_replacement,
+    saxo_order::{OrderEntry, cancel_protective_stop_for_replacement},
     state::{AppState, saxo_instrument_key},
 };
 
@@ -443,6 +443,7 @@ async fn run_stop_action(
         quantity,
         stop_price,
         "automatic_protective_stop_sweep",
+        OrderEntry::Automatic,
     )
     .await;
     match outcome {
