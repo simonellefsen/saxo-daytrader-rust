@@ -319,6 +319,34 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     .await;
     record_step_duration(&mut step_durations, "performance_benchmarks", step_started);
     let step_started = Instant::now();
+    // Read-only reference data for evaluation and the dashboard: past US
+    // report dates (Alpha Vantage), US company profiles (Financial Modeling
+    // Prep) and Saxo trading schedules. Each spends a small daily budget and
+    // none is read by a gate, a prompt or the broker path.
+    let earnings_dates = bounded_enrichment_step(
+        "earnings_dates",
+        enrichment_step_timeout("EARNINGS_DATES", 60),
+        crate::earnings_dates::run_earnings_dates_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "earnings_dates", step_started);
+    let step_started = Instant::now();
+    let company_profiles = bounded_enrichment_step(
+        "company_profiles",
+        enrichment_step_timeout("COMPANY_PROFILES", 60),
+        crate::company_profiles::run_company_profiles_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "company_profiles", step_started);
+    let step_started = Instant::now();
+    let trading_schedules = bounded_enrichment_step(
+        "trading_schedules",
+        enrichment_step_timeout("TRADING_SCHEDULES", 90),
+        crate::trading_schedule::run_trading_schedule_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "trading_schedules", step_started);
+    let step_started = Instant::now();
     let execution_queue = match run_saxo_execution_queue(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -492,6 +520,9 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "daily_indicators": daily_indicators,
         "shadow_hermes_repair": shadow_hermes_repair,
         "performance_benchmarks": performance_benchmarks,
+        "earnings_dates": earnings_dates,
+        "company_profiles": company_profiles,
+        "trading_schedules": trading_schedules,
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "portfolio_value_snapshot": portfolio_value_snapshot,

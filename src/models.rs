@@ -94,6 +94,10 @@ pub struct DashboardView {
     pub performance_pnl_reconciliation: Option<PerformancePnlReconciliationPayload>,
     pub performance_exposure_attribution: Option<PerformanceExposureAttributionPayload>,
     pub performance_realised_sell_outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
+    /// Loaded for the Performance tab only.
+    pub sector_concentration: Option<SectorConcentrationPayload>,
+    /// Loaded for the Market tab only.
+    pub trading_schedule: Option<TradingSchedulePayload>,
     pub integrity: OverviewIntegrityPayload,
     pub execution_protection: ProtectiveStopCoveragePayload,
     pub market_status: MarketStatusPayload,
@@ -2395,6 +2399,168 @@ pub struct FillQualityPayload {
     pub generated_at: String,
     pub fills: Vec<FillQualityRowPayload>,
     /// Set only when the evaluation could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+/// How far the report-date store has got.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsCoveragePayload {
+    pub us_symbols: i64,
+    pub with_report_dates: i64,
+    /// Each US stock's last fetch result; `not_yet_asked` before its first.
+    pub by_last_status: BTreeMap<String, i64>,
+    pub reports_stored: i64,
+    /// Reports whose timing (before or after the session) is known.
+    pub reports_with_timing: i64,
+    /// Of those, reports whose reaction session has a stored price bar.
+    pub reports_measured: i64,
+}
+
+/// Overnight gaps at the open, for one sample of sessions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsGapSamplePayload {
+    /// `report_reaction` or `other_sessions`.
+    pub sample: String,
+    pub sessions: i64,
+    pub median_abs_gap_pct: Option<f64>,
+    pub p90_abs_gap_pct: Option<f64>,
+    /// Share of sessions whose open gapped more than `big_gap_threshold_pct`.
+    pub share_big_gaps: Option<f64>,
+}
+
+/// One report the book held a position through.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsHeldReportPayload {
+    pub symbol: String,
+    pub reported_date: String,
+    pub report_time: String,
+    /// The first session that could react: the report day for a report before
+    /// the open, the next session for one after the close.
+    pub reaction_date: String,
+    pub gap_pct: Option<f64>,
+    pub close_change_pct: Option<f64>,
+    pub quantity: f64,
+    pub currency: String,
+    /// Quantity times the gap, in local currency: the part of the move no
+    /// stop can avoid.
+    pub gap_pnl_local: Option<f64>,
+    /// The same at today's FX rate.
+    pub gap_pnl_dkk: Option<f64>,
+    /// The book sold some of the position on the reaction session.
+    pub sold_on_reaction_session: bool,
+}
+
+/// `/api/evaluation/earnings`: what reports did to prices and to the book.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsEvaluationPayload {
+    pub generated_at: String,
+    pub coverage: EarningsCoveragePayload,
+    pub big_gap_threshold_pct: f64,
+    pub gaps: Vec<EarningsGapSamplePayload>,
+    /// Opens that gapped more than the threshold, split by whether a report
+    /// explains them.
+    pub big_gaps_after_reports: i64,
+    pub big_gaps_otherwise: i64,
+    /// Book holdings since this date were checked against report dates.
+    pub book_since: String,
+    pub held_reports: Vec<EarningsHeldReportPayload>,
+    pub held_report_gap_pnl_dkk: Option<f64>,
+    pub definitions: BTreeMap<String, String>,
+    /// Set only when the evaluation could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+/// The book's holdings and last 30 days of buying in one sector.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SectorExposureRowPayload {
+    /// The provider's sector, or `Unprofiled` for a holding without a profile.
+    pub sector: String,
+    pub holdings: i64,
+    pub value_dkk: f64,
+    pub share_of_invested: Option<f64>,
+    /// Value-weighted over the holdings whose profile has a beta.
+    pub weighted_beta: Option<f64>,
+    pub buys_30d: i64,
+    pub buys_30d_dkk: f64,
+    pub symbols: Vec<String>,
+}
+
+/// A holding whose beta is at or above the listed threshold.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HighBetaHoldingPayload {
+    pub symbol: String,
+    pub beta: f64,
+    pub value_dkk: f64,
+}
+
+/// `/api/portfolio/concentration`: the book grouped by sector.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SectorConcentrationPayload {
+    pub generated_at: String,
+    pub invested_value_dkk: f64,
+    pub holdings: i64,
+    pub profiled_holdings: i64,
+    /// Value-weighted beta of the profiled holdings.
+    pub weighted_beta_profiled: Option<f64>,
+    pub sectors: Vec<SectorExposureRowPayload>,
+    pub high_beta_holdings: Vec<HighBetaHoldingPayload>,
+    pub high_beta_threshold: f64,
+    /// Stored profiles by their last fetch result.
+    pub profile_status: BTreeMap<String, i64>,
+    pub caveat: String,
+    /// Set only when the view could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+/// An exchange's regular session that closes early.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScheduleEarlyClosePayload {
+    pub date: String,
+    pub closes_at: String,
+    pub minutes: i64,
+    pub typical_minutes: i64,
+}
+
+/// One exchange's Saxo trading schedule, from the instruments read on it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExchangeTradingSchedulePayload {
+    pub exchange: String,
+    pub instruments: i64,
+    pub covered_from: Option<String>,
+    pub covered_through: Option<String>,
+    pub next_regular_open: Option<String>,
+    pub next_regular_close: Option<String>,
+    /// Weekdays inside the covered window with no regular session.
+    pub closed_weekdays: Vec<String>,
+    pub early_closes: Vec<ScheduleEarlyClosePayload>,
+    /// Instruments whose regular sessions differ from the exchange's most
+    /// common schedule.
+    pub instruments_differing: Vec<String>,
+}
+
+/// `/api/market/trading-schedule`: Saxo's per-instrument trading schedules.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TradingSchedulePayload {
+    pub generated_at: String,
+    pub latest_run_date: Option<String>,
+    pub instruments: i64,
+    pub by_status: BTreeMap<String, i64>,
+    pub exchanges: Vec<ExchangeTradingSchedulePayload>,
+    pub caveat: String,
+    /// Set only when the view could not be built.
     pub status: Option<String>,
     pub unavailable_reason: Option<String>,
 }

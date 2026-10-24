@@ -340,6 +340,33 @@ strategy:
       - key: uk_large_cap
         label: FTSE 100 (ISF ETF proxy)
         symbol: ISF:xlon
+  # Read-only reference data for evaluation and the dashboard. None of it is
+  # read by a Decision Report, the Trading Manager, sizing, or the broker path.
+  #
+  # Past US quarterly report dates from Alpha Vantage, for the earnings
+  # evaluation. A free key allows 25 calls a day; the budget leaves headroom
+  # for manual reads.
+  earnings_dates:
+    enabled: true
+    daily_call_budget: 20
+    max_calls_per_cycle: 8
+    refresh_days: 30
+  # US sector, industry and beta from Financial Modeling Prep, for the sector
+  # concentration view. The free plan has no European or Danish profiles.
+  company_profiles:
+    enabled: true
+    daily_call_budget: 100
+    max_calls_per_cycle: 25
+    refresh_days: 30
+  # Saxo per-instrument trading schedules: every held instrument plus one per
+  # other exchange, read once a day before the European open. Weekends too, so
+  # Monday's sessions are known before Monday.
+  trading_schedules:
+    enabled: true
+    timezone: Europe/Copenhagen
+    daily_time: "06:30"
+    run_weekdays_only: false
+    max_instruments: 60
   enabled: true
   mode: swing
   selection_interval_minutes: 15
@@ -800,6 +827,14 @@ openfigi:
   api_key: ENV:OPENFIGI_API_KEY
   base_url: https://api.openfigi.com/v3
   timeout_seconds: 10
+
+alpha_vantage:
+  api_key: ENV:ALPHAVANTAGE_API_KEY
+  base_url: https://www.alphavantage.co
+
+financial_modeling_prep:
+  api_key: ENV:FINANCIALMODELINGPREP_API_KEY
+  base_url: https://financialmodelingprep.com
 
 quiver:
   api_key: ENV:QUIVERQUANT_API_KEY

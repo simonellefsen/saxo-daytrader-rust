@@ -353,6 +353,19 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "performance_benchmarks"],
         "Read-only Saxo-backed benchmark price-return comparison. It cannot affect decisions, Hermes, sizing, or broker behavior.",
     ),
+    // ---- read-only reference data ----
+    advisory_subtree(
+        &["strategy", "earnings_dates"],
+        "Alpha Vantage past report dates for the earnings evaluation. Read-only; no gate, prompt, sizing rule or broker path reads them.",
+    ),
+    advisory_subtree(
+        &["strategy", "company_profiles"],
+        "Financial Modeling Prep US profiles for the sector concentration view. Read-only; no sector limit is enforced.",
+    ),
+    advisory_subtree(
+        &["strategy", "trading_schedules"],
+        "Saxo per-instrument trading schedules shown on the Market tab. Read-only; market-open decisions still use exchange sessions.",
+    ),
     // ---- strategy.swing.markov_gate ----
     enforced(
         &["strategy", "swing", "markov_gate", "enabled"],
@@ -1223,6 +1236,42 @@ mod tests {
             crate::config::yaml_at(&local, &path),
             crate::config::yaml_at(&kubernetes, &path),
             "local and Kubernetes performance benchmark policy must stay aligned"
+        );
+    }
+
+    /// The reference-data blocks are duplicated across both shipped configs.
+    #[test]
+    fn reference_data_policy_matches_between_local_and_kubernetes_configs() {
+        let read = |path: &str| {
+            parse(
+                &std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
+                    .expect("config is readable"),
+            )
+        };
+        let local = read("config.yaml");
+        let kubernetes = read("deploy/k8s/base/config.k8s.yaml");
+        for path in [
+            &["strategy", "earnings_dates"][..],
+            &["strategy", "company_profiles"],
+            &["strategy", "trading_schedules"],
+            &["alpha_vantage"],
+            &["financial_modeling_prep"],
+        ] {
+            let shipped = crate::config::yaml_at(&local, path);
+            assert!(shipped.is_some(), "{path:?} is configured");
+            assert_eq!(
+                shipped,
+                crate::config::yaml_at(&kubernetes, path),
+                "{path:?} must match between local and Kubernetes configs"
+            );
+        }
+        let budget =
+            crate::config::yaml_at(&local, &["strategy", "earnings_dates", "daily_call_budget"])
+                .and_then(YamlValue::as_i64)
+                .expect("earnings budget is configured");
+        assert!(
+            budget < 25,
+            "a free Alpha Vantage key allows 25 calls a day"
         );
     }
 

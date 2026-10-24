@@ -1697,6 +1697,22 @@ impl AppState {
                 warn!("dashboard typed performance realised SELL outcomes degraded: {err:#}");
                 None
             });
+        let sector_concentration = if active_view == "performance" {
+            crate::company_profiles::sector_concentration_payload(self)
+                .await
+                .map_err(|err| warn!("dashboard sector concentration degraded: {err:#}"))
+                .ok()
+        } else {
+            None
+        };
+        let trading_schedule = if active_view == "market" {
+            crate::trading_schedule::trading_schedule_payload(self)
+                .await
+                .map_err(|err| warn!("dashboard trading schedule degraded: {err:#}"))
+                .ok()
+        } else {
+            None
+        };
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({
@@ -2084,6 +2100,8 @@ impl AppState {
             performance_pnl_reconciliation,
             performance_exposure_attribution,
             performance_realised_sell_outcomes,
+            sector_concentration,
+            trading_schedule,
             integrity,
             execution_protection,
             market_status,

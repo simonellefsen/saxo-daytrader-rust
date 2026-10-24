@@ -196,6 +196,8 @@ mod tests {
             ("saxo_portfolio.rs", include_str!("saxo_portfolio.rs")),
             ("state.rs", include_str!("state.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
+            ("earnings_dates.rs", include_str!("earnings_dates.rs")),
+            ("company_profiles.rs", include_str!("company_profiles.rs")),
         ];
         let mut sends = 0;
         for (file, source) in files {
@@ -213,6 +215,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(sends, 8, "the guard must still see every known send");
+        assert_eq!(sends, 10, "the guard must still see every known send");
     }
 }

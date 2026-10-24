@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod build_info;
+mod company_profiles;
 mod config;
 mod config_contract;
 mod daily_indicators;
@@ -13,6 +14,8 @@ mod decision_quality;
 mod decision_schema;
 mod decision_state;
 mod drawdown_guard;
+mod earnings_dates;
+mod earnings_evaluation;
 mod editorial_research;
 mod entry_evaluation;
 mod entry_evaluation_state;
@@ -85,6 +88,7 @@ mod state;
 mod strategy_journal;
 mod strategy_journal_state;
 mod trading_manager;
+mod trading_schedule;
 mod ui;
 mod xai_decision;
 

@@ -3491,3 +3491,14 @@ Closes the BUY-side gap the U18 entry left open ("Not changed").
 - **One correction to an earlier reading.** The MDB gap on 2026-09-28 followed the CEO's departure, not an earnings report, so it is not evidence for an earnings blackout.
 - **New method, not yet in the runtime.** The universe-wide per-signal test (daily cross-sectional rank correlation with the region-relative forward return, dates sampled every h sessions) exists only as an ad hoc script. Making it a standing measurement is one of the options listed on the page.
 - No code or configuration changed.
+
+## [2026-10-24] Reference data | Report dates, sector profiles and trading schedules
+
+- **Why.** The month review left three questions the runtime could not answer: whether holding through earnings reports costs the book money, how concentrated the book is by sector (it had no sector data), and when an exchange closes early or not at all. Simon added free Alpha Vantage, Financial Modeling Prep and Finnhub keys and chose to measure before building any gate.
+- **What.** Three read-only stores, described in [reference data](../docs/reference-data.md):
+  - `earnings_dates.rs`: every past quarter's report date and timing for US stocks, from Alpha Vantage, 20 calls a day. Backfilling about 80 stocks takes four days. `earnings_evaluation.rs` serves `/api/evaluation/earnings`: gaps on reaction sessions against other sessions, and every report the book held through since 2026-07-16.
+  - `company_profiles.rs`: US sector, industry and beta from Financial Modeling Prep, and `/api/portfolio/concentration` with a Sector Concentration panel on the Performance tab. European and Danish profiles need a paid plan and show as `Unprofiled`.
+  - `trading_schedule.rs`: Saxo trading schedules for every held instrument plus one per other exchange, once a day, with a panel on the Market tab. This partly closes the roadmap's trading-schedule row.
+- **Safety.** Nothing reads these stores in a gate, prompt, sizing rule or broker path. Both provider keys travel in the query string, so both files joined the URL-stripping guard (now 10 sends). Failures are stored as categories only.
+- **Not checked before release.** The trading-schedule response shape: neither the public pages nor Simon's saved documentation copy showed it. The parser is tolerant, and the first read records `no_sessions` or an HTTP category if the shape or SIM support differs.
+- **Tests.** 17 new: ticker mapping, Alpha Vantage refusals read from the body, daily budget accounting on in-memory SQLite, reaction-session placement, held-report costing, sector grouping, schedule targets, and a Thanksgiving-week schedule with a holiday, an early close and an odd instrument.

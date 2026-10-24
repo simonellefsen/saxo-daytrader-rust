@@ -219,6 +219,9 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/evaluation/entries", get(entry_evaluation))
         .route("/api/evaluation/exits", get(exit_evaluation))
         .route("/api/evaluation/fills", get(fill_quality))
+        .route("/api/evaluation/earnings", get(earnings_evaluation))
+        .route("/api/portfolio/concentration", get(sector_concentration))
+        .route("/api/market/trading-schedule", get(trading_schedule))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -2015,6 +2018,54 @@ async fn fill_quality(
         Err(err) => {
             warn!("fill quality endpoint degraded: {err:#}");
             Json(crate::models::FillQualityPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
+async fn earnings_evaluation(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::models::EarningsEvaluationPayload> {
+    match crate::earnings_evaluation::earnings_evaluation_payload(&state).await {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("earnings evaluation endpoint degraded: {err:#}");
+            Json(crate::models::EarningsEvaluationPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
+async fn sector_concentration(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::models::SectorConcentrationPayload> {
+    match crate::company_profiles::sector_concentration_payload(&state).await {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("sector concentration endpoint degraded: {err:#}");
+            Json(crate::models::SectorConcentrationPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
+async fn trading_schedule(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::models::TradingSchedulePayload> {
+    match crate::trading_schedule::trading_schedule_payload(&state).await {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("trading schedule endpoint degraded: {err:#}");
+            Json(crate::models::TradingSchedulePayload {
                 status: Some("unavailable".to_string()),
                 unavailable_reason: Some(unavailable_reason(&err)),
                 ..Default::default()

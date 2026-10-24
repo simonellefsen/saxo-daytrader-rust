@@ -6931,6 +6931,24 @@ impl AppState {
                 .await
                 .context("creating performance benchmark runtime tables")?;
         }
+        for sql in crate::earnings_dates::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating earnings report date tables")?;
+        }
+        for sql in crate::company_profiles::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating company profile table")?;
+        }
+        for sql in crate::trading_schedule::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating instrument trading schedule table")?;
+        }
         for sql in crate::operator_actions::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)

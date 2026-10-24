@@ -40,15 +40,16 @@ use crate::{
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoverageExceptionPayload, ProtectiveStopCoveragePayload,
         ProtectiveStopCoveragePositionPayload, ProtectiveStopLifecycleTestPayload,
-        ProtectiveStopPrecheckPayload, QuiverConflictPayload, SupportRiskEvidenceLabelPayload,
-        SupportRiskEvidenceOutcomePayload, SupportRiskEvidencePayload,
-        TradingManagerBlockedBuyGatePayload, TradingManagerCashBudgetPayload,
-        TradingManagerConcentrationPolicyPayload, TradingManagerCurrencyExposurePayload,
-        TradingManagerCurrencyExposureRowPayload, TradingManagerDrawdownGuardrailPayload,
-        TradingManagerInstrumentQuarantinePayload,
+        ProtectiveStopPrecheckPayload, QuiverConflictPayload, SectorConcentrationPayload,
+        SupportRiskEvidenceLabelPayload, SupportRiskEvidenceOutcomePayload,
+        SupportRiskEvidencePayload, TradingManagerBlockedBuyGatePayload,
+        TradingManagerCashBudgetPayload, TradingManagerConcentrationPolicyPayload,
+        TradingManagerCurrencyExposurePayload, TradingManagerCurrencyExposureRowPayload,
+        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
-        TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
+        TradingManagerRunPayload, TradingSchedulePayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
     read_model,
 };
@@ -2947,6 +2948,10 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 attribution: data.performance_exposure_attribution.clone(),
                 prefs: prefs.clone(),
             }
+            SectorConcentrationPanel {
+                concentration: data.sector_concentration.clone(),
+                prefs: prefs.clone(),
+            }
             PerformanceRealisedSellOutcomesPanel {
                 outcomes: data.performance_realised_sell_outcomes.clone(),
                 prefs: prefs.clone(),
@@ -3281,6 +3286,168 @@ fn PerformanceExposureAttributionPanel(
                 }
                 p { class: "muted benchmark-caveat", "{evidence}. Instrument currency is a grouping label only: Saxo reports exposure P/L in the broker account currency, so this table does not isolate FX P/L. Showing the top {attribution.shown_row_count} by absolute P/L; sector, strategy-role, realised P/L, costs, and tax attribution are not included." }
             }
+        }
+    }
+}
+
+#[component]
+fn SectorConcentrationPanel(
+    concentration: Option<SectorConcentrationPayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let Some(concentration) = concentration.filter(|value| value.status.is_none()) else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Sector Concentration" }
+                        p { class: "muted", "Holdings and the last 30 days of buying, grouped by sector. Read-only." }
+                    }
+                    span { class: "status warn-status", "unavailable" }
+                }
+            }
+        };
+    };
+    let largest = concentration
+        .sectors
+        .iter()
+        .find(|row| row.sector != "Unprofiled")
+        .map(|row| {
+            format!(
+                "{} · {}",
+                row.sector,
+                row.share_of_invested
+                    .map(|share| format_pct(share, &prefs))
+                    .unwrap_or_else(|| "n/a".to_string())
+            )
+        })
+        .unwrap_or_else(|| "n/a".to_string());
+    let beta = concentration
+        .weighted_beta_profiled
+        .map(|beta| format_number(beta, 2, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let high_beta = concentration
+        .high_beta_holdings
+        .iter()
+        .map(|row| format!("{} {}", row.symbol, format_number(row.beta, 2, &prefs)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let threshold = format_number(concentration.high_beta_threshold, 1, &prefs);
+    let profiled_label = format!(
+        "{} of {} holdings profiled",
+        concentration.profiled_holdings, concentration.holdings
+    );
+    let tone = if concentration.profiled_holdings > 0 {
+        "good-status"
+    } else {
+        "warn-status"
+    };
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Sector Concentration" }
+                    p { class: "muted", "Holdings and the last 30 days of buying, grouped by sector. Read-only: no sector limit is enforced." }
+                }
+                span { class: "status {tone}", "{profiled_label}" }
+            }
+            div { class: "mini-grid",
+                MetricCard { label: "Largest sector", value: largest, tone: "" }
+                MetricCard { label: "Value-weighted beta", value: beta, tone: "" }
+                MetricCard { label: "High-beta holdings", value: concentration.high_beta_holdings.len().to_string(), tone: "" }
+            }
+            div { class: "table-wrap",
+                table {
+                    thead { tr { th { "Sector" } th { "Holdings" } th { "Value" } th { "Share of invested" } th { "Beta" } th { "Bought, 30 days" } th { "Stocks" } } }
+                    tbody {
+                        for row in concentration.sectors.iter() {
+                            tr {
+                                td { strong { "{row.sector}" } }
+                                td { "{row.holdings}" }
+                                td { "{format_dkk(row.value_dkk, &prefs)}" }
+                                td { "{row.share_of_invested.map(|share| format_pct(share, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                td { "{row.weighted_beta.map(|beta| format_number(beta, 2, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                td { "{row.buys_30d} · {format_dkk(row.buys_30d_dkk, &prefs)}" }
+                                td { class: "muted", "{row.symbols.join(\", \")}" }
+                            }
+                        }
+                    }
+                }
+            }
+            if !high_beta.is_empty() {
+                p { class: "muted", "Beta {threshold} or above: {high_beta}." }
+            }
+            p { class: "muted benchmark-caveat", "{concentration.caveat}" }
+        }
+    }
+}
+
+#[component]
+fn TradingSchedulePanel(
+    schedule: Option<TradingSchedulePayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let Some(schedule) = schedule.filter(|value| value.status.is_none()) else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                h3 { "Saxo Trading Schedule" }
+                p { class: "muted", "The stored trading schedules could not be read." }
+            }
+        };
+    };
+    let statuses = schedule
+        .by_status
+        .iter()
+        .map(|(status, count)| format!("{status} {count}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let latest = schedule
+        .latest_run_date
+        .clone()
+        .unwrap_or_else(|| "never".to_string());
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Saxo Trading Schedule" }
+                    p { class: "muted", "Per-instrument sessions from Saxo, read once a day: closed weekdays, early closes, and instruments that keep a different schedule from their exchange." }
+                }
+                span { class: "status", "read {latest}" }
+            }
+            if schedule.exchanges.is_empty() {
+                p { class: "muted", "No schedule is stored yet. It is read once a day from 06:30 Copenhagen time." }
+            } else {
+                div { class: "table-wrap",
+                    table {
+                        thead { tr { th { "Exchange" } th { "Instruments" } th { "Next regular open" } th { "Covered through" } th { "Closed weekdays" } th { "Early closes" } th { "Different schedule" } } }
+                        tbody {
+                            for row in schedule.exchanges.iter() {
+                                tr {
+                                    td { strong { "{row.exchange}" } }
+                                    td { "{row.instruments}" }
+                                    td { "{format_timestamp(row.next_regular_open.as_deref().unwrap_or_default(), &prefs)}" }
+                                    td { "{format_timestamp(row.covered_through.as_deref().unwrap_or_default(), &prefs)}" }
+                                    td { if row.closed_weekdays.is_empty() { "none" } else { "{row.closed_weekdays.join(\", \")}" } }
+                                    td {
+                                        if row.early_closes.is_empty() {
+                                            "none"
+                                        } else {
+                                            for close in row.early_closes.iter() {
+                                                div { "{close.date}: closes {format_timestamp(&close.closes_at, &prefs)} ({close.minutes} of {close.typical_minutes} min)" }
+                                            }
+                                        }
+                                    }
+                                    td { if row.instruments_differing.is_empty() { "none" } else { "{row.instruments_differing.join(\", \")}" } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !statuses.is_empty() {
+                p { class: "muted", "Last read by status: {statuses}." }
+            }
+            p { class: "muted benchmark-caveat", "{schedule.caveat}" }
         }
     }
 }
@@ -3959,6 +4126,7 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             }
                         }
                     }
+                    TradingSchedulePanel { schedule: data.trading_schedule.clone(), prefs: prefs.clone() }
                 }
             }
             aside {

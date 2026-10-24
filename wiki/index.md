@@ -23,6 +23,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [concepts/markov-regime-model](concepts/markov-regime-model.md) - How the Markov signal is actually computed, why every tuning counts bars rather than days, and which model changes have been tested and rejected.
 - [QuiverQuant advisory signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md) - Rust alternative-data signal implementation for decision reports and Hermes.
 - [Performance benchmark comparison](/Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md) - Read-only Saxo-backed ETF-proxy comparison and its limits.
+- [Reference data](/Users/lindau/codex/rust_daytrader/docs/reference-data.md) - Read-only US report dates (Alpha Vantage), US sector and beta (Financial Modeling Prep) and Saxo trading schedules: budgets, key handling and coverage limits.
 
 ## Source Notes
 
