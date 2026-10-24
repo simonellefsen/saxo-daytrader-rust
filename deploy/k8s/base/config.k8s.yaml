@@ -351,6 +351,16 @@ strategy:
     daily_call_budget: 20
     max_calls_per_cycle: 8
     refresh_days: 30
+  # Record-only earnings blackout. Finnhub's upcoming US report dates are read
+  # once a day, a weekday at a time; each queued US BUY whose next report
+  # reacts within window_sessions weekday sessions is noted as one a blackout
+  # would have stopped. Nothing is blocked.
+  earnings_blackout:
+    enabled: true
+    window_sessions: 5
+    days_ahead: 21
+    timezone: Europe/Copenhagen
+    daily_time: "06:45"
   # US sector, industry and beta from Financial Modeling Prep, for the sector
   # concentration view. The free plan has no European or Danish profiles.
   company_profiles:
@@ -844,6 +854,11 @@ alpha_vantage:
   base_url: https://www.alphavantage.co
   # Calls a day across every store; the free key allows 25.
   daily_call_budget: 24
+
+finnhub:
+  # Sent in the X-Finnhub-Token header; the free tier allows 60 calls a minute.
+  api_key: ENV:FINNHUBIO_API_KEY
+  base_url: https://finnhub.io/api/v1
 
 financial_modeling_prep:
   api_key: ENV:FINANCIALMODELINGPREP_API_KEY

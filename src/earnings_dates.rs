@@ -275,10 +275,10 @@ pub async fn run_earnings_dates_cycle(state: &AppState) -> Result<JsonValue> {
     let today = now.date_naive();
     let calls_today = calls_made_on(state, today).await?;
     let provider_calls_today = alpha_vantage::calls_made_on(state, today).await;
-    if alpha_vantage::quota_exhausted_on(state, today).await {
+    if alpha_vantage::quota_refused_recently(state, now).await {
         return Ok(json!({
             "status": "idle",
-            "reason": "quota_exhausted_today",
+            "reason": "quota_refused_recently",
             "calls_today": calls_today,
         }));
     }
@@ -683,7 +683,7 @@ mod tests {
             alpha_vantage::calls_made_on(&state, tomorrow.date_naive()).await,
             1
         );
-        assert!(!alpha_vantage::quota_exhausted_on(&state, tomorrow.date_naive()).await);
+        assert!(!alpha_vantage::quota_refused_recently(&state, tomorrow).await);
 
         record_outcome(
             &state,
@@ -693,6 +693,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(alpha_vantage::quota_exhausted_on(&state, tomorrow.date_naive()).await);
+        assert!(alpha_vantage::quota_refused_recently(&state, tomorrow).await);
+        assert!(
+            !alpha_vantage::quota_refused_recently(&state, tomorrow + Duration::hours(7)).await,
+            "a refusal pauses the stores for hours, not until the next date"
+        );
     }
 }

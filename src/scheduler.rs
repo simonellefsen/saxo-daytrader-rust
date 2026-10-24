@@ -342,6 +342,16 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     .await;
     record_step_duration(&mut step_durations, "earnings_dates", step_started);
     let step_started = Instant::now();
+    // Upcoming US report dates (Finnhub) for the record-only earnings
+    // blackout the Trading Manager notes; it blocks nothing.
+    let earnings_calendar = bounded_enrichment_step(
+        "earnings_calendar",
+        enrichment_step_timeout("EARNINGS_CALENDAR", 60),
+        crate::earnings_blackout::run_earnings_calendar_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "earnings_calendar", step_started);
+    let step_started = Instant::now();
     let company_profiles = bounded_enrichment_step(
         "company_profiles",
         enrichment_step_timeout("COMPANY_PROFILES", 60),
@@ -533,6 +543,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "performance_benchmarks": performance_benchmarks,
         "congress_trades": congress_trades,
         "earnings_dates": earnings_dates,
+        "earnings_calendar": earnings_calendar,
         "company_profiles": company_profiles,
         "trading_schedules": trading_schedules,
         "execution_queue": execution_queue,

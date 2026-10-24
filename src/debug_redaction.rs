@@ -199,6 +199,7 @@ mod tests {
             ("alpha_vantage.rs", include_str!("alpha_vantage.rs")),
             ("earnings_dates.rs", include_str!("earnings_dates.rs")),
             ("congress_trades.rs", include_str!("congress_trades.rs")),
+            ("earnings_blackout.rs", include_str!("earnings_blackout.rs")),
             ("company_profiles.rs", include_str!("company_profiles.rs")),
         ];
         let mut sends = 0;
@@ -217,7 +218,8 @@ mod tests {
                 );
             }
         }
-        // 11 counts the local test endpoint send in `saxo_order.rs`'s tests.
-        assert_eq!(sends, 11, "the guard must still see every known send");
+        // 12 counts the local test endpoint send in `saxo_order.rs`'s tests.
+        // Finnhub's key travels in a header, but its send strips the URL too.
+        assert_eq!(sends, 12, "the guard must still see every known send");
     }
 }

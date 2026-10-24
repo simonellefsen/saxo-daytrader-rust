@@ -2523,6 +2523,26 @@ async fn run_for_report(
         );
     }
 
+    // Record-only: notes queued US BUYs a blackout would have stopped. The
+    // orders above are already queued and are not changed.
+    let blackout_candidates = approved
+        .iter()
+        .zip(&queued_orders)
+        .filter(|((order, _), queued)| {
+            order.action == "BUY" && queued["status"] != "already_exists"
+        })
+        .filter_map(|((order, _), queued)| {
+            Some(crate::earnings_blackout::BlackoutCandidate {
+                execution_order_id: queued.get("id")?.as_i64().filter(|id| *id > 0)?,
+                symbol: order.symbol.clone(),
+                estimated_value_dkk: order.estimated_value_dkk,
+            })
+        })
+        .collect::<Vec<_>>();
+    let earnings_blackout =
+        crate::earnings_blackout::record_buy_observations(state, report.id, &blackout_candidates)
+            .await;
+
     let queue_result = json!({
         "status": if queued_orders.is_empty() { "completed_no_orders" } else { "queued" },
         "orders": queued_orders
@@ -2569,6 +2589,7 @@ async fn run_for_report(
             "active": active_quarantines.iter().map(InstrumentQuarantine::to_json).collect::<Vec<_>>(),
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
+        "earnings_blackout": earnings_blackout,
         "cost_guard": cost_guard.to_json(),
         "holding_limit_policy": holding_limit.to_json(),
         "concentration_policy": concentration.to_json(),

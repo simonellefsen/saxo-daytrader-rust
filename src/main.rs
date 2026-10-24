@@ -16,6 +16,7 @@ mod decision_quality;
 mod decision_schema;
 mod decision_state;
 mod drawdown_guard;
+mod earnings_blackout;
 mod earnings_dates;
 mod earnings_evaluation;
 mod editorial_research;

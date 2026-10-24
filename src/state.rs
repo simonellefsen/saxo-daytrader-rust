@@ -6943,6 +6943,12 @@ impl AppState {
                 .await
                 .context("creating congress trade tables")?;
         }
+        for sql in crate::earnings_blackout::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating earnings blackout tables")?;
+        }
         for sql in crate::company_profiles::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)

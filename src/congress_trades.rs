@@ -197,10 +197,10 @@ pub async fn run_congress_trades_cycle(state: &AppState) -> Result<JsonValue> {
     let today = now.date_naive();
     let calls_today = calls_made_on(state, today).await?;
     let provider_calls_today = alpha_vantage::calls_made_on(state, today).await;
-    if alpha_vantage::quota_exhausted_on(state, today).await {
+    if alpha_vantage::quota_refused_recently(state, now).await {
         return Ok(json!({
             "status": "idle",
-            "reason": "quota_exhausted_today",
+            "reason": "quota_refused_recently",
             "calls_today": calls_today,
         }));
     }

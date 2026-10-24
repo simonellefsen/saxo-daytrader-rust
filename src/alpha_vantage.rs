@@ -12,7 +12,7 @@
 use std::time::Duration as StdDuration;
 
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -26,6 +26,7 @@ const DEFAULT_DAILY_CALL_BUDGET: i64 = 24;
 pub(crate) const REQUEST_SPACING_MS: u64 = 1_300;
 /// One row per stock per store, dated by its last attempt.
 const FETCH_TABLES: &[&str] = &["earnings_date_fetches", "congress_trade_fetches"];
+const QUOTA_BACKOFF_HOURS: i64 = 6;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AlphaVantage {
@@ -134,17 +135,22 @@ pub(crate) async fn calls_made_on(state: &AppState, day: NaiveDate) -> usize {
     calls
 }
 
-/// Whether any store was refused for the day's allowance on `day`.
-pub(crate) async fn quota_exhausted_on(state: &AppState, day: NaiveDate) -> bool {
+/// Whether any store was refused for the daily allowance in the last
+/// `QUOTA_BACKOFF_HOURS`. Alpha Vantage does not say when its day starts, so
+/// a refusal pauses every store for a few hours rather than until the next
+/// UTC date.
+pub(crate) async fn quota_refused_recently(state: &AppState, now: DateTime<Utc>) -> bool {
+    let since = (now - Duration::hours(QUOTA_BACKOFF_HOURS))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for table in FETCH_TABLES {
-        let exhausted = state
+        let refused = state
             .select_json(&format!(
                 "SELECT last_status FROM {table}
-                 WHERE last_attempt_date = '{day}' AND last_status = 'quota_exhausted' LIMIT 1"
+                 WHERE last_status = 'quota_exhausted' AND last_attempt_at >= '{since}' LIMIT 1"
             ))
             .await
             .is_ok_and(|rows| !rows.is_empty());
-        if exhausted {
+        if refused {
             return true;
         }
     }

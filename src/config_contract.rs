@@ -363,6 +363,10 @@ const CONTRACT: &[ContractEntry] = &[
         "Alpha Vantage past report dates for the earnings evaluation. Read-only; no gate, prompt, sizing rule or broker path reads them.",
     ),
     advisory_subtree(
+        &["strategy", "earnings_blackout"],
+        "Record-only earnings blackout: notes queued US BUYs whose next report reacts within the window. It blocks, delays and resizes nothing.",
+    ),
+    advisory_subtree(
         &["strategy", "company_profiles"],
         "Financial Modeling Prep US profiles for the sector concentration view. Read-only; no sector limit is enforced.",
     ),
@@ -1259,7 +1263,9 @@ mod tests {
             &["strategy", "company_profiles"],
             &["strategy", "trading_schedules"],
             &["strategy", "congress_trades"],
+            &["strategy", "earnings_blackout"],
             &["alpha_vantage"],
+            &["finnhub"],
             &["financial_modeling_prep"],
         ] {
             let shipped = crate::config::yaml_at(&local, path);

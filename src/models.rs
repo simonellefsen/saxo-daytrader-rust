@@ -2454,6 +2454,57 @@ pub struct EarningsHeldReportPayload {
     pub sold_on_reaction_session: bool,
 }
 
+/// One queued US BUY, checked against the stock's next report.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsBlackoutObservationPayload {
+    pub execution_order_id: i64,
+    pub recorded_at: String,
+    pub symbol: String,
+    pub estimated_value_dkk: Option<f64>,
+    /// `None` when the calendar had no report within its window.
+    pub next_report_date: Option<String>,
+    pub report_time: String,
+    pub reaction_date: Option<String>,
+    /// Weekday sessions from the BUY to the reaction session; 0 is the same day.
+    pub sessions_until_reaction: Option<i64>,
+    /// The reaction falls within the window, so a blackout would have
+    /// stopped this BUY. It went ahead.
+    pub would_block: bool,
+    /// `fresh`, `stale` or `never_read`: the calendar when the BUY was noted.
+    pub calendar_status: String,
+    pub order_status: String,
+    /// The open against the previous close on the reaction session, once it
+    /// has a stored bar.
+    pub reaction_gap_pct: Option<f64>,
+    /// The gap on the executed quantity, at today's FX rate.
+    pub gap_pnl_dkk: Option<f64>,
+}
+
+/// The record-only earnings blackout's evidence so far.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EarningsBlackoutPayload {
+    /// Always `record_only`: no BUY is blocked.
+    pub mode: String,
+    pub enabled: bool,
+    pub window_sessions: i64,
+    pub calendar_last_read: Option<String>,
+    pub calendar_last_status: Option<String>,
+    /// Days whose calendar answer hit Finnhub's row cap and may be missing reports.
+    pub calendar_truncated_days: i64,
+    pub upcoming_reports_stored: i64,
+    pub observed_us_buys: i64,
+    pub would_block_buys: i64,
+    /// Would-block BUYs whose reaction session has a stored bar.
+    pub measured_blocked_buys: i64,
+    /// The summed gap on would-block BUYs that executed: what the blackout
+    /// would have avoided (negative) or forgone (positive).
+    pub blocked_gap_pnl_dkk: Option<f64>,
+    /// The latest 200, newest first.
+    pub observations: Vec<EarningsBlackoutObservationPayload>,
+}
+
 /// `/api/evaluation/earnings`: what reports did to prices and to the book.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -2470,6 +2521,8 @@ pub struct EarningsEvaluationPayload {
     pub book_since: String,
     pub held_reports: Vec<EarningsHeldReportPayload>,
     pub held_report_gap_pnl_dkk: Option<f64>,
+    /// The record-only blackout: queued US BUYs a blackout would have stopped.
+    pub blackout: EarningsBlackoutPayload,
     pub definitions: BTreeMap<String, String>,
     /// Set only when the evaluation could not be built.
     pub status: Option<String>,

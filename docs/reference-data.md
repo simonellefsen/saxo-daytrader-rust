@@ -32,6 +32,35 @@ read the signal, never a gate or the broker path.
   weighted by recency and by the amount band's lower bound. Alpha Vantage
   reports no excess return or price change, so those fields are empty.
 
+## Record-only earnings blackout
+
+Chosen on 2026-10-24: record what a blackout would do before letting one
+block anything.
+
+- **Calendar.** Finnhub's free `/calendar/earnings` gives upcoming US report
+  dates and timing (`bmo`, `amc`, or blank). One request for a window stops
+  at 1,500 rows, which on the first probe kept only 5 to 13 November and
+  dropped the busiest week, so the calendar is read one weekday at a time,
+  21 days forward, once a day from 06:45 Copenhagen (about 16 calls).
+  `upcoming_earnings` keeps the universe's tickers; each day read replaces
+  that day, so a moved report does not linger. `earnings_calendar_reads`
+  records each day's read, and a day whose answer hits the cap counts as
+  truncated.
+- **Observation.** When the Trading Manager queues a US BUY,
+  `earnings_blackout_observations` notes the stock's next report, its
+  reaction session (the report day before the open or with unknown timing,
+  the next weekday after the close) and the weekday sessions until then. A
+  reaction within `window_sessions` (5) marks the BUY `would_block`. The
+  order is not changed, delayed or resized, and the manager run carries the
+  same summary under `earnings_blackout`.
+- **Evaluation.** `/api/evaluation/earnings` gains a `blackout` section: each
+  observation with its order status and, once the reaction session has a
+  bar, its gap and the gap on the executed quantity. The sum over
+  would-block BUYs is what a blackout would have avoided (if negative) or
+  forgone (if positive).
+- Sessions are weekdays; an exchange holiday makes a report look one
+  session nearer than it is.
+
 ## Keys
 
 `ALPHAVANTAGE_API_KEY` and `FINANCIALMODELINGPREP_API_KEY` come from `.env`
@@ -42,8 +71,8 @@ string, so every request maps its send error through
 `debug_redaction.rs` covers both files. A failure is stored as a category
 (`http_402`, `quota_exhausted`, `timeout`), never as error text.
 
-`FINNHUBIO_API_KEY` is in `.env` but nothing reads it yet. It is the candidate
-source for upcoming US report dates if an earnings blackout is built.
+`FINNHUBIO_API_KEY` feeds the record-only earnings blackout below. Finnhub
+takes it in the `X-Finnhub-Token` header, not the URL.
 
 `QUIVERQUANT_API_KEY` is no longer read; the deployed config dropped its
 `quiver:` provider block on 2026-10-24.

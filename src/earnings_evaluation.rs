@@ -234,6 +234,10 @@ fn definitions() -> BTreeMap<String, String> {
             "quantity held times the gap, valued at today's FX rate rather than the rate on the day",
         ),
         (
+            "blackout",
+            "record-only: each queued US BUY whose next report reacts within window_sessions weekday sessions is noted as one a blackout would have stopped; the BUY still goes ahead",
+        ),
+        (
             "scope",
             "read-only measurement over stored report dates and daily bars; it gates nothing",
         ),
@@ -374,6 +378,7 @@ pub(crate) async fn earnings_evaluation_payload(
         book_since,
         held_reports: held,
         held_report_gap_pnl_dkk,
+        blackout: crate::earnings_blackout::blackout_payload(state).await?,
         definitions: definitions(),
         status: None,
         unavailable_reason: None,
