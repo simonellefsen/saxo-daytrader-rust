@@ -3463,3 +3463,22 @@ Closes the two gaps recorded in the filled-stop entry above (`b18cc8a`).
   - `saxo_order`: `Cancelled`, `Expired`, `Rejected` and `DoneForDay` each settle their stop, a replay settles nothing, and another symbol's working stop is untouched.
   - `state`: the backfill also settles a stop cancelled at Saxo and an expired one.
   - `state`: a stop driven through prepare, placement, reconciliation and cancellation keeps every document it is not given.
+
+## [2026-10-24] Trading manager | A BUY for a share-class symbol sees the position Saxo holds
+
+Closes the BUY-side gap the U18 entry left open ("Not changed").
+
+- **The gap.** `PositionExposure` keyed every symbol by its text. Held positions come from `position_items`, which uses Saxo's spelling (`ALKb:xcse`). Candidates and persisted BUY reservations use the system spelling (`ALK-B:xcse`).
+  - A follow-on BUY therefore saw no existing exposure. The 4% position-weight cap granted a whole position of headroom on top of the holding.
+  - A reservation under the system spelling took a second holding slot beside the position.
+  - The concentration gate's "already held" flag was wrong for the same reason.
+- **Fix.** `PositionExposure` loads an `InstrumentBook` and counts each symbol under `key()`. That is the held key of the same instrument (`uic` plus asset type) when the instrument is already held under another spelling, and otherwise the symbol itself.
+  - Positions, persisted reservations and same-cycle `reserve_buy` all go through `key()`, so one instrument is one entry.
+  - Lookups (`value_for`, `has_invalid_value`, `has_position`) use it too.
+  - With no recorded identity, a symbol matches by spelling alone, as before.
+- **Live read before deploy (read-only).** 24 broker positions and no active BUY reservations, so the holding count is unchanged.
+  - The book is 228,541 DKK, so the 4% cap is about 9,140 DKK.
+  - At open price, ALKb holds about 6,710 DKK, COLOb about 6,730 and AMBUb about 7,280. A follow-on BUY now has about 1,900 to 2,400 DKK of headroom, instead of the full 9,140.
+- **Tests.** Two new ones in `trading_manager`, on in-memory SQLite through `PositionExposure::load`. Both fail with matching by spelling only.
+  - A BUY for `ALK-B:xcse` sees the 6,860 DKK holding: the weight cap refuses it, the holding cap treats it as an add, and a CFD sharing NOVO-B's uic is not joined.
+  - A reservation and its holding under two spellings take one slot (2, not 3), `reserve_buy` merges into it, and a new symbol fits at 2 of 3.

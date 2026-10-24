@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-10-18
+updated: 2026-10-24
 ---
 
 # Daytrader Roadmap
@@ -43,6 +43,8 @@ not automatically a probability of profit.
 - Keep the wiki as the durable memory for operational lessons, experiments, and strategy behavior.
 
 ## Recently Landed
+
+- 2026-10-24: A BUY for a share-class symbol now sees the position Saxo holds under its compact symbol. `PositionExposure` counts every symbol under its instrument (`uic` plus asset type) through `InstrumentBook`, so the position-weight cap, holding cap and concentration gate treat `ALK-B:xcse` and `ALKb:xcse` as one position. Before this, a follow-on BUY of ALK-B, AMBU-B or COLO-B could take a whole 4% position of headroom on top of the holding. This closes the BUY side of U18.
 
 - 2026-10-23: A SELL for a share-class symbol now sees the holding Saxo reports under its compact symbol (urgent-todo U18, found the same day as the protective-stop sweep's first-day gap). `src/instrument_identity.rs` maps every symbol to Saxo's instrument, `uic` plus `asset_type`, from `daily_indicator_signals` and `broker_position_snapshots`. The trading manager's SELL cap, the order path's holding guard and closing position, the stop release before a sell, the sell reservations, the risk-off open price and the local/broker divergence check all match on it. Live on landing, only ALK-B, AMBU-B and COLO-B have two spellings; a SELL now sees 28, 95 and 14 shares, and the 6 divergences pair up. See [log](log.md).
 

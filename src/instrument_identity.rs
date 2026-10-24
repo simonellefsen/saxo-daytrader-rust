@@ -68,7 +68,7 @@ impl SymbolAliases {
 }
 
 /// Symbol-to-instrument map built from the two tables that record both.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct InstrumentBook {
     identities: HashMap<String, InstrumentIdentity>,
 }

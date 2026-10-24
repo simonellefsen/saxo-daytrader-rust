@@ -17,7 +17,7 @@ use crate::{
     db::{row_to_json, sql_escape, value_f64, value_i64},
     drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
     hermes_state::hermes_experiment_status_is_advisory_eligible,
-    instrument_identity::symbol_aliases,
+    instrument_identity::{InstrumentBook, symbol_aliases},
     state::{AppState, SUPPORTED_EXPERIMENT_VARIABLES, json_text},
 };
 
@@ -169,11 +169,18 @@ struct ConcentrationConfig {
 /// A bounded local view of current position market values. It is loaded once
 /// per manager cycle and then reserved as BUYs are approved, so sequential
 /// reports cannot independently spend the same symbol headroom.
+///
+/// Every symbol is counted under its instrument: Saxo reports a share class
+/// held as `ALKb:xcse`, while candidates and reservations name it
+/// `ALK-B:xcse`, and keyed by spelling a BUY saw no existing exposure -- the
+/// weight cap granted a whole position's headroom on top of the holding and
+/// the holding cap spent a second slot on it.
 #[derive(Clone, Debug, PartialEq)]
 struct PositionExposure {
     values_dkk: HashMap<String, f64>,
     invalid_symbols: HashSet<String>,
     held_symbols: HashSet<String>,
+    instruments: InstrumentBook,
     available: bool,
     persisted_buy_reservation_count: usize,
     persisted_buy_reservation_value_dkk: f64,
@@ -337,37 +344,35 @@ impl PositionExposure {
             }
         };
 
-        let mut values_dkk = HashMap::new();
-        let mut invalid_symbols = HashSet::new();
-        let mut held_symbols = HashSet::new();
-        for row in rows {
-            let symbol = row
-                .get("symbol")
-                .and_then(JsonValue::as_str)
-                .map(normalize_symbol_key)
-                .unwrap_or_default();
-            let quantity = row.get("quantity").and_then(json_number).unwrap_or(0.0);
-            if symbol.is_empty() || quantity <= 0.0 {
-                continue;
-            }
-            held_symbols.insert(symbol.clone());
-            let market_value_dkk = row.get("market_value_dkk").and_then(json_number);
-            if let Some(value) = market_value_dkk.filter(|value| value.is_finite() && *value > 0.0)
-            {
-                values_dkk.insert(symbol, value);
-            } else {
-                invalid_symbols.insert(symbol);
-            }
-        }
         let mut exposure = Self {
-            values_dkk,
-            invalid_symbols,
-            held_symbols,
+            values_dkk: HashMap::new(),
+            invalid_symbols: HashSet::new(),
+            held_symbols: HashSet::new(),
+            instruments: InstrumentBook::load(state).await,
             available: true,
             persisted_buy_reservation_count: 0,
             persisted_buy_reservation_value_dkk: 0.0,
             unvalued_buy_reservation_count: 0,
         };
+        for row in rows {
+            let symbol = row
+                .get("symbol")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            let quantity = row.get("quantity").and_then(json_number).unwrap_or(0.0);
+            if symbol.trim().is_empty() || quantity <= 0.0 {
+                continue;
+            }
+            let key = exposure.key(symbol);
+            exposure.held_symbols.insert(key.clone());
+            let market_value_dkk = row.get("market_value_dkk").and_then(json_number);
+            if let Some(value) = market_value_dkk.filter(|value| value.is_finite() && *value > 0.0)
+            {
+                *exposure.values_dkk.entry(key).or_insert(0.0) += value;
+            } else {
+                exposure.invalid_symbols.insert(key);
+            }
+        }
         exposure.apply_persisted_buy_reservations(reservations);
         exposure
     }
@@ -377,6 +382,7 @@ impl PositionExposure {
             values_dkk: HashMap::new(),
             invalid_symbols: HashSet::new(),
             held_symbols: HashSet::new(),
+            instruments: InstrumentBook::default(),
             available: false,
             persisted_buy_reservation_count: 0,
             persisted_buy_reservation_value_dkk: 0.0,
@@ -387,33 +393,51 @@ impl PositionExposure {
     fn apply_persisted_buy_reservations(&mut self, reservations: &PersistedBuyReservations) {
         for reservation in &reservations.items {
             self.persisted_buy_reservation_count += 1;
-            self.held_symbols.insert(reservation.symbol.clone());
+            let key = self.key(&reservation.symbol);
+            self.held_symbols.insert(key.clone());
             if let Some(value_dkk) = reservation.reserved_value_dkk {
                 self.persisted_buy_reservation_value_dkk += value_dkk;
-                *self
-                    .values_dkk
-                    .entry(reservation.symbol.clone())
-                    .or_insert(0.0) += value_dkk;
+                *self.values_dkk.entry(key).or_insert(0.0) += value_dkk;
             } else {
                 // We know this BUY can become a holding, but cannot value it.
                 // Preserve that uncertainty so a symbol-specific weight gate
                 // never treats the reservation as zero exposure.
                 self.unvalued_buy_reservation_count += 1;
-                self.invalid_symbols.insert(reservation.symbol.clone());
+                self.invalid_symbols.insert(key);
             }
         }
     }
 
+    /// The key `symbol` is counted under: the held key of the same instrument
+    /// (`uic` and asset type) when it is already held under another spelling,
+    /// otherwise the symbol itself. Without a recorded identity a symbol is
+    /// matched by spelling alone, as before instrument matching.
+    fn key(&self, symbol: &str) -> String {
+        let symbol = normalize_symbol_key(symbol);
+        if self.held_symbols.contains(&symbol) {
+            return symbol;
+        }
+        let Some(identity) = self.instruments.identity(&symbol) else {
+            return symbol;
+        };
+        self.held_symbols
+            .iter()
+            .filter(|held| self.instruments.identity(held) == Some(identity))
+            .min()
+            .cloned()
+            .unwrap_or(symbol)
+    }
+
     fn value_for(&self, symbol: &str) -> Option<f64> {
-        self.values_dkk.get(&normalize_symbol_key(symbol)).copied()
+        self.values_dkk.get(&self.key(symbol)).copied()
     }
 
     fn has_invalid_value(&self, symbol: &str) -> bool {
-        self.invalid_symbols.contains(&normalize_symbol_key(symbol))
+        self.invalid_symbols.contains(&self.key(symbol))
     }
 
     fn has_position(&self, symbol: &str) -> bool {
-        self.held_symbols.contains(&normalize_symbol_key(symbol))
+        self.held_symbols.contains(&self.key(symbol))
     }
 
     fn holding_count(&self) -> usize {
@@ -467,11 +491,9 @@ impl PositionExposure {
         if !self.available || !value_dkk.is_finite() || value_dkk <= 0.0 {
             return;
         }
-        *self
-            .values_dkk
-            .entry(normalize_symbol_key(symbol))
-            .or_insert(0.0) += value_dkk;
-        self.held_symbols.insert(normalize_symbol_key(symbol));
+        let key = self.key(symbol);
+        *self.values_dkk.entry(key.clone()).or_insert(0.0) += value_dkk;
+        self.held_symbols.insert(key);
     }
 
     /// Per-currency exposure by **value**, for the read-only concentration panel.
@@ -8002,6 +8024,7 @@ mod tests {
                 .iter()
                 .map(|(symbol, _)| normalize_symbol_key(symbol))
                 .collect(),
+            instruments: InstrumentBook::default(),
             available: true,
             persisted_buy_reservation_count: 0,
             persisted_buy_reservation_value_dkk: 0.0,
@@ -8309,15 +8332,7 @@ mod tests {
     #[test]
     fn position_weight_gate_fails_closed_when_position_snapshot_is_unavailable() {
         let mut order = buy_order(1.0, 1_000.0);
-        let exposure = PositionExposure {
-            values_dkk: HashMap::new(),
-            invalid_symbols: HashSet::new(),
-            held_symbols: HashSet::new(),
-            available: false,
-            persisted_buy_reservation_count: 0,
-            persisted_buy_reservation_value_dkk: 0.0,
-            unvalued_buy_reservation_count: 0,
-        };
+        let exposure = PositionExposure::unavailable();
         let gate = position_weight_gate(
             &mut order,
             100_000.0,
@@ -8362,15 +8377,7 @@ mod tests {
     #[test]
     fn holding_limit_fails_closed_without_a_position_snapshot() {
         let mut order = candidate_limit_order("AMD:xnas", "BUY");
-        let exposure = PositionExposure {
-            values_dkk: HashMap::new(),
-            invalid_symbols: HashSet::new(),
-            held_symbols: HashSet::new(),
-            available: false,
-            persisted_buy_reservation_count: 0,
-            persisted_buy_reservation_value_dkk: 0.0,
-            unvalued_buy_reservation_count: 0,
-        };
+        let exposure = PositionExposure::unavailable();
         let gate = holding_limit_gate(&mut order, holding_limit_test_config(25), &exposure);
         assert!(!gate.approved);
         assert!(
@@ -9241,5 +9248,115 @@ mod tests {
                 .expect("sellable quantity"),
             0.0
         );
+    }
+
+    /// Exposure loaded the way a manager cycle loads it, over Saxo holding
+    /// ALK-B as `ALKb:xcse` (28 x 245 DKK) and NOVO-B as `NOVOb:xcse`, whose
+    /// indicator row resolves to a CFD sharing the stock's uic.
+    async fn share_class_exposure(extra: &[&str]) -> PositionExposure {
+        let state = manager_queue_test_state().await;
+        for statement in [
+            "CREATE TABLE import_batches (batch_id TEXT NOT NULL, imported_at TEXT NOT NULL)",
+            "CREATE TABLE trade_ledger (
+                symbol TEXT, side TEXT, quantity REAL, created_at TEXT,
+                net_amount_dkk REAL NOT NULL, status TEXT NOT NULL
+            )",
+            "CREATE TABLE broker_position_snapshots (
+                symbol TEXT PRIMARY KEY, updated_at TEXT, instrument_name TEXT, isin TEXT,
+                uic INTEGER, asset_type TEXT, quantity REAL NOT NULL, currency TEXT,
+                open_price_local REAL, open_price_including_costs_local REAL,
+                execution_time_open TEXT, value_date TEXT, market_state TEXT,
+                can_be_closed INTEGER
+            )",
+            "CREATE TABLE daily_indicator_signals (
+                id TEXT PRIMARY KEY, run_date TEXT NOT NULL, symbol TEXT NOT NULL,
+                uic BIGINT, asset_type TEXT
+            )",
+            "INSERT INTO broker_position_snapshots
+                (symbol, uic, asset_type, quantity, currency, open_price_local, can_be_closed) VALUES
+                ('ALKb:xcse', 19782, 'Stock', 28, 'DKK', 245.0, 1),
+                ('NOVOb:xcse', 15629, 'Stock', 10, 'DKK', 400.0, 1)",
+            "INSERT INTO daily_indicator_signals (id, run_date, symbol, uic, asset_type) VALUES
+                ('a', '2026-10-22', 'ALK-B:xcse', 19782, 'Stock'),
+                ('b', '2026-10-22', 'NOVO-B:xcse', 15629, 'CfdOnStock')",
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
+        {
+            sqlx::query(statement)
+                .execute(&state.pool)
+                .await
+                .expect("seed share-class exposure");
+        }
+        let reservations = PersistedBuyReservations::load(&state)
+            .await
+            .expect("load active BUY reservations");
+        let exposure = PositionExposure::load(&state, &reservations).await;
+        assert!(exposure.available);
+        exposure
+    }
+
+    #[tokio::test]
+    async fn a_buy_for_the_system_symbol_sees_the_share_class_saxo_holds_compactly() {
+        // Keyed by spelling, `ALK-B:xcse` had no exposure: the 4% cap granted
+        // a whole position of headroom on top of 6,860 DKK already held.
+        let exposure = share_class_exposure(&[]).await;
+        assert!(exposure.has_position("ALK-B:xcse"));
+        assert_eq!(exposure.value_for("ALK-B:xcse"), Some(6_860.0));
+        assert_eq!(exposure.holding_count(), 2);
+
+        let mut add = candidate_limit_order("ALK-B:xcse", "BUY");
+        let gate = position_weight_gate(
+            &mut add,
+            175_000.0,
+            position_weight_test_config(),
+            &exposure,
+        );
+        assert!(!gate.approved, "{}", gate.reason);
+        assert!(
+            gate.reason.contains("6860 DKK"),
+            "the cap must count the holding: {}",
+            gate.reason
+        );
+
+        let mut add = candidate_limit_order("ALK-B:xcse", "BUY");
+        let gate = holding_limit_gate(&mut add, holding_limit_test_config(2), &exposure);
+        assert!(gate.approved, "{}", gate.reason);
+        assert!(
+            gate.reason.contains("adds to an existing"),
+            "{}",
+            gate.reason
+        );
+
+        assert!(
+            !exposure.has_position("NOVO-B:xcse"),
+            "a shared uic in another asset type is a different instrument"
+        );
+        assert_eq!(exposure.value_for("NOVO-B:xcse"), None);
+    }
+
+    #[tokio::test]
+    async fn a_holding_and_its_reservations_under_two_spellings_take_one_slot() {
+        let mut exposure = share_class_exposure(&[
+            "INSERT INTO execution_orders (
+                id, created_at, report_id, symbol, action, order_type, mode, status, adapter,
+                quantity, estimated_value_dkk, approval_required, strategy_key, request_json
+             ) VALUES
+                (1, '2026-10-23T09:00:00Z', 1, 'ALK-B:xcse', 'BUY', 'Limit', 'live', 'broker_working', 'saxo', 4, 1000, 0, 'reservation:alk-b', '{}')",
+        ])
+        .await;
+        assert_eq!(exposure.holding_count(), 2, "one instrument, one slot");
+        assert_eq!(exposure.value_for("ALK-B:xcse"), Some(7_860.0));
+        assert_eq!(exposure.value_for("ALKb:xcse"), Some(7_860.0));
+
+        exposure.reserve_buy("ALK-B:xcse", 100.0);
+        assert_eq!(exposure.holding_count(), 2);
+        assert_eq!(exposure.value_for("ALKb:xcse"), Some(7_960.0));
+
+        // Counted by spelling the book looked full at 3 of 3.
+        let mut new_position = candidate_limit_order("DEMANT:xcse", "BUY");
+        let gate = holding_limit_gate(&mut new_position, holding_limit_test_config(3), &exposure);
+        assert!(gate.approved, "{}", gate.reason);
+        assert!(gate.reason.contains("2/3"), "{}", gate.reason);
     }
 }
