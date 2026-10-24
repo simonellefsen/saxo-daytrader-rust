@@ -1732,9 +1732,11 @@ async fn execute_order(
     let request_id = placement_request_id(order_id);
     let broker_result = match place_order(state, session, &request_id, &request_payload).await {
         Ok(result) => result,
+        // `{err:#}` keeps the source chain: a timed-out send prints only
+        // "error sending request" on its own.
         Err(err) if placement_error_is_state_unknown(&err) => {
             let error_text = format!(
-                "Saxo order placement outcome is unknown; automatic retry is blocked pending broker reconciliation: {err}"
+                "Saxo order placement outcome is unknown; automatic retry is blocked pending broker reconciliation: {err:#}"
             );
             return fail_order(
                 state,
@@ -1752,7 +1754,7 @@ async fn execute_order(
                         "external_reference": external_reference(order_id),
                         "retry_blocked": true,
                         "next_action": "Reconcile the order in Saxo before any manual retry.",
-                        "error": err.to_string()
+                        "error": format!("{err:#}")
                     }
                 }),
             )
@@ -1763,11 +1765,11 @@ async fn execute_order(
                 state,
                 order_id,
                 "execution_failed",
-                &err.to_string(),
+                &format!("{err:#}"),
                 &json!({
                     "adapter": "saxo",
                     "failure_stage": "placement",
-                    "error": err.to_string(),
+                    "error": format!("{err:#}"),
                     "precheck": precheck,
                     "payload": sanitized_order_payload(&request_payload),
                     "broker_position": closing_position.map(sanitized_broker_position)
@@ -2209,15 +2211,34 @@ async fn place_order(
     request_id: &str,
     payload: &JsonValue,
 ) -> Result<JsonValue> {
-    saxo_post_json(
-        state,
-        session,
-        "/trade/v2/orders",
-        Some(request_id),
-        payload,
-        "Order placement",
+    placement_answer(
+        saxo_post_json(
+            state,
+            session,
+            "/trade/v2/orders",
+            Some(request_id),
+            payload,
+            "Order placement",
+        )
+        .await,
     )
-    .await
+}
+
+/// What a placement request settled.
+///
+/// Saxo's reference for `POST /trade/v2/orders` says to read a 200 by its
+/// `OrderId` and `ErrorInfo`, and that `OrderId` is absent only when the
+/// request failed. A success with neither settles nothing. Recording it as
+/// submitted would leave an order with no broker id, which broker sync never
+/// reads; as an unknown outcome it is reconciled by ExternalReference.
+fn placement_answer(answer: Result<JsonValue>) -> Result<JsonValue> {
+    let placement = answer.map_err(OrderMutationError::classify)?;
+    if broker_order_id(&placement).is_none() {
+        return Err(OrderMutationError::unknown(anyhow!(
+            "Order placement succeeded without an OrderId or ErrorInfo, so Saxo may have placed it"
+        )));
+    }
+    Ok(placement)
 }
 
 fn placement_request_id(order_id: i64) -> String {
@@ -2228,17 +2249,98 @@ fn placement_request_id(order_id: i64) -> String {
 /// Do not make these errors retryable automatically: the stored request id and
 /// ExternalReference are the operator's reconciliation handles.
 fn placement_error_is_state_unknown(error: &anyhow::Error) -> bool {
-    placement_error_text_is_state_unknown(&error.to_string())
+    OrderMutationError::of(error).is_some_and(|mutation| mutation.outcome_unknown)
 }
 
 pub fn protective_stop_lifecycle_error_is_state_unknown(error: &anyhow::Error) -> bool {
     placement_error_is_state_unknown(error)
 }
 
+/// A failed order mutation: the POST that places an order or the DELETE that
+/// cancels one.
+///
+/// Whether it may still have changed the broker state is decided here, where
+/// the request was made, because only a mutation can change it. A position
+/// read, quote or precheck that fails first has changed nothing at Saxo,
+/// whatever its error says, and the protective-stop paths return all of those
+/// through the same error as their placement and cancellation. Display and the
+/// source chain are the wrapped error's, so stored error text is unchanged.
+#[derive(Debug)]
+struct OrderMutationError {
+    outcome_unknown: bool,
+    error: anyhow::Error,
+}
+
+impl OrderMutationError {
+    fn classify(error: anyhow::Error) -> anyhow::Error {
+        let outcome_unknown = mutation_outcome_is_unknown(&error);
+        anyhow::Error::new(Self {
+            outcome_unknown,
+            error,
+        })
+    }
+
+    fn unknown(error: anyhow::Error) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            outcome_unknown: true,
+            error,
+        })
+    }
+
+    fn of(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref::<Self>())
+    }
+}
+
+impl std::fmt::Display for OrderMutationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl std::error::Error for OrderMutationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.error.source()
+    }
+}
+
+/// Whether a failed order mutation may still have reached Saxo and changed
+/// the broker state. Fails toward unknown: only proof that the request never
+/// left, or a broker verdict on it, is a definite failure.
+///
+/// A transport error is judged by its kind, never its text. reqwest prints a
+/// timed-out send as "error sending request" and keeps "operation timed out"
+/// in the source chain, so a 30-second timeout on a placement read as a
+/// definite failure. A connect or TLS error, or a request that could not be
+/// built, sent nothing. Anything later -- a timeout, a connection closed or
+/// reset before the answer, a body that never arrived -- may have been acted on.
+///
+/// A 5xx is not a verdict on the order: a gateway's 502 or 504 page comes from
+/// in front of the broker after it forwarded the request. An answer that
+/// carries an `OrderId` names an order that exists, whatever else it says.
+fn mutation_outcome_is_unknown(error: &anyhow::Error) -> bool {
+    for cause in error.chain() {
+        if let Some(transport) = cause.downcast_ref::<reqwest::Error>() {
+            return !(transport.is_connect() || transport.is_builder());
+        }
+        if let Some(answer) = cause.downcast_ref::<SaxoAnswerError>()
+            && (answer.status.is_server_error() || answer.broker_order_id.is_some())
+        {
+            return true;
+        }
+    }
+    placement_error_text_is_state_unknown(&format!("{error:#}"))
+}
+
+/// Saxo's own words for an order it has not finished deciding: the Learn
+/// article's `TradeNotCompleted` timeout, and `OrderCommandPending`, "pending
+/// broker confirmation", which may still be confirmed.
 fn placement_error_text_is_state_unknown(error_text: &str) -> bool {
     let lower = error_text.to_ascii_lowercase();
     lower.contains("tradenotcompleted")
         || lower.contains("trade not completed")
+        || lower.contains("ordercommandpending")
+        || lower.contains("pending broker confirmation")
         || lower.contains("timed out")
         || lower.contains("timeout")
 }
@@ -2367,6 +2469,8 @@ async fn saxo_delete_json(
     let client = crate::saxo_http::client();
     crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
         .await;
+    // Every DELETE here cancels an order, so its failures carry a verdict on
+    // whether the cancellation may still have happened.
     let response = client
         .delete(format!("{}{}", openapi_base_url(state, session)?, path))
         .bearer_auth(access_token)
@@ -2374,25 +2478,68 @@ async fn saxo_delete_json(
         .query(query)
         .send()
         .await
-        .map_err(crate::debug_redaction::request_error_without_url)?;
+        .map_err(crate::debug_redaction::request_error_without_url)
+        .map_err(|err| OrderMutationError::classify(err.into()))?;
     crate::saxo_rate_limit::observe(path, response.headers());
-    saxo_response_json(response, action).await
+    saxo_response_json(response, action)
+        .await
+        .map_err(OrderMutationError::classify)
 }
+
+/// A Saxo answer that reports a failure: a non-success status, or an
+/// `ErrorInfo` in a success. Display is the text order rows store; the status
+/// and any `OrderId` stay typed so an order mutation can tell a broker
+/// rejection from an answer that does not settle the order.
+#[derive(Debug)]
+struct SaxoAnswerError {
+    status: StatusCode,
+    broker_order_id: Option<String>,
+    message: String,
+}
+
+impl std::fmt::Display for SaxoAnswerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SaxoAnswerError {}
 
 async fn saxo_response_json(response: reqwest::Response, action: &str) -> Result<JsonValue> {
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = match response.text().await {
+        Ok(body) => body,
+        // A success whose body never arrived says nothing. Read as `{}` it
+        // looked like an empty answer, and a placement like one without an
+        // OrderId; keep the transport error so it reads as unknown.
+        Err(err) if status.is_success() => {
+            return Err(
+                anyhow::Error::new(crate::debug_redaction::request_error_without_url(err)).context(
+                    format!(
+                        "{action} answered HTTP {} but its body could not be read",
+                        status.as_u16()
+                    ),
+                ),
+            );
+        }
+        Err(_) => String::new(),
+    };
     let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
     let error_text = extract_saxo_error(&payload);
-    if !status.is_success() {
-        if let Some(error_text) = error_text {
-            bail!("{action} failed: {error_text}");
+    if !status.is_success() || error_text.is_some() {
+        let message = match error_text {
+            Some(error_text) => format!("{action} failed: {error_text}"),
+            None => {
+                let snippet: String = body.chars().take(300).collect();
+                format!("{action} failed: HTTP {}: {}", status.as_u16(), snippet)
+            }
+        };
+        return Err(SaxoAnswerError {
+            status,
+            broker_order_id: broker_order_id(&payload),
+            message,
         }
-        let snippet: String = body.chars().take(300).collect();
-        bail!("{action} failed: HTTP {}: {}", status.as_u16(), snippet);
-    }
-    if let Some(error_text) = error_text {
-        bail!("{action} failed: {error_text}");
+        .into());
     }
     Ok(payload)
 }
@@ -5264,6 +5411,273 @@ mod tests {
         .try_get::<i64, _>("count")
         .expect("expiry event count");
         assert_eq!(event_count, 1);
+    }
+
+    /// How long a request to the local endpoints below may run. Production
+    /// uses the 30-second Saxo client; the errors are of the same kinds.
+    const LOCAL_ENDPOINT_TIMEOUT: Duration = Duration::from_millis(300);
+
+    /// An endpoint on 127.0.0.1 that writes `answer` to each connection and
+    /// then holds it open without another byte, the way a stalled gateway
+    /// does. An empty answer never responds at all.
+    async fn local_endpoint(answer: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local endpoint");
+        let address = listener.local_addr().expect("local endpoint address");
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((connection, _)) = listener.accept().await {
+                let mut written = 0;
+                while written < answer.len() && connection.writable().await.is_ok() {
+                    match connection.try_write(&answer.as_bytes()[written..]) {
+                        Ok(count) => written += count,
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                    }
+                }
+                held.push(connection);
+            }
+        });
+        format!("http://{address}/sim/openapi/trade/v2/orders")
+    }
+
+    /// An endpoint that takes the request and drops the connection unanswered.
+    async fn local_endpoint_dropping_the_request() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local endpoint");
+        let address = listener.local_addr().expect("local endpoint address");
+        tokio::spawn(async move {
+            while let Ok((connection, _)) = listener.accept().await {
+                let _ = connection.readable().await;
+                drop(connection);
+            }
+        });
+        format!("http://{address}/sim/openapi/trade/v2/orders")
+    }
+
+    /// An address nothing listens on, so the connection is refused before any
+    /// byte of the request is sent.
+    async fn refused_endpoint() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local endpoint");
+        let address = listener.local_addr().expect("local endpoint address");
+        drop(listener);
+        format!("http://{address}/sim/openapi/trade/v2/orders")
+    }
+
+    /// `saxo_post_json`'s send and answer handling, pointed at a local
+    /// endpoint with a short client timeout. Its result is what `place_order`
+    /// hands to `placement_answer`.
+    async fn post_order_request(url: &str) -> Result<JsonValue> {
+        let client = reqwest::Client::builder()
+            .timeout(LOCAL_ENDPOINT_TIMEOUT)
+            .build()
+            .expect("build a local test client");
+        let response = client
+            .post(url)
+            .header(header::ACCEPT, "application/json")
+            .json(&json!({"ExternalReference": "saxo-daytrader:1"}))
+            .send()
+            .await
+            .map_err(crate::debug_redaction::request_error_without_url)?;
+        saxo_response_json(response, "Order placement").await
+    }
+
+    /// What `place_order` returns for a canned Saxo answer, without a socket.
+    async fn placement_answering(status: u16, content_type: &str, body: &str) -> Result<JsonValue> {
+        let answer = axum::http::Response::builder()
+            .status(status)
+            .header("content-type", content_type)
+            .body(body.to_string())
+            .expect("build a canned Saxo answer");
+        placement_answer(
+            saxo_response_json(reqwest::Response::from(answer), "Order placement").await,
+        )
+    }
+
+    /// The bug: reqwest prints a timed-out send as "error sending request",
+    /// so a 30-second timeout on `POST /trade/v2/orders` was stored as
+    /// `execution_failed` and released its reservations, though Saxo says such
+    /// an order is often placed and must not be retried.
+    #[tokio::test]
+    async fn a_timed_out_placement_is_an_unknown_outcome() {
+        let sent = post_order_request(&local_endpoint("").await)
+            .await
+            .expect_err("an unanswered placement times out");
+        let transport = sent
+            .downcast_ref::<reqwest::Error>()
+            .expect("a transport error");
+        assert!(transport.is_timeout() && !transport.is_connect());
+        let (shown, chained) = (sent.to_string(), format!("{sent:#}"));
+
+        let error = placement_answer(Err(sent)).expect_err("a timeout is not a placement");
+        assert!(placement_error_is_state_unknown(&error));
+        assert!(protective_stop_lifecycle_error_is_state_unknown(&error));
+        assert_eq!(error.to_string(), shown, "the stored text does not change");
+        assert_eq!(format!("{error:#}"), chained);
+        assert!(
+            chained.contains("timed out"),
+            "the order row stores the chain, which names the timeout: {chained}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_placement_dropped_before_its_answer_is_an_unknown_outcome() {
+        let sent = post_order_request(&local_endpoint_dropping_the_request().await)
+            .await
+            .expect_err("a dropped connection is not an answer");
+        assert!(
+            sent.downcast_ref::<reqwest::Error>()
+                .is_some_and(|transport| !transport.is_connect())
+        );
+        let error = placement_answer(Err(sent)).expect_err("still not a placement");
+        assert!(placement_error_is_state_unknown(&error), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn a_placement_that_never_connected_is_a_definite_failure() {
+        let sent = post_order_request(&refused_endpoint().await)
+            .await
+            .expect_err("nothing listens there");
+        assert!(
+            sent.downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_connect)
+        );
+        let error = placement_answer(Err(sent)).expect_err("still not a placement");
+        assert!(!placement_error_is_state_unknown(&error), "{error:#}");
+    }
+
+    /// Read as `{}`, this placement was marked submitted with no broker id,
+    /// which neither broker sync nor the unknown-state sweep ever reads again.
+    #[tokio::test]
+    async fn a_success_whose_body_never_arrives_is_an_unknown_outcome() {
+        let stalled = local_endpoint(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{\"OrderId\":",
+        )
+        .await;
+        let error = placement_answer(post_order_request(&stalled).await)
+            .expect_err("half a body is not a placement");
+        assert!(placement_error_is_state_unknown(&error), "{error:#}");
+        assert!(
+            error
+                .to_string()
+                .contains("Order placement answered HTTP 200 but its body could not be read")
+        );
+    }
+
+    /// A gateway page is not a verdict on the order, and its words do not say
+    /// "timeout": "Gateway Time-out" escaped the text checks.
+    #[tokio::test]
+    async fn a_server_error_on_placement_is_an_unknown_outcome() {
+        for (status, page) in [
+            (
+                504,
+                "<html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center></body></html>",
+            ),
+            (
+                502,
+                "<html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center></body></html>",
+            ),
+            (503, "Service Unavailable"),
+            (500, ""),
+        ] {
+            let error = placement_answering(status, "text/html", page)
+                .await
+                .expect_err("a server error is not a placement");
+            assert!(!placement_error_text_is_state_unknown(&format!(
+                "{error:#}"
+            )));
+            assert!(
+                placement_error_is_state_unknown(&error),
+                "HTTP {status} must not release the order for a retry"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn saxo_answers_that_leave_the_order_undecided_are_unknown_outcomes() {
+        for (status, body) in [
+            // A success with neither OrderId nor ErrorInfo.
+            (200, "{}"),
+            (
+                400,
+                r#"{"ErrorInfo":{"ErrorCode":"OrderCommandPending","Message":"Your order request is pending broker confirmation. Confirmation is still possible."}}"#,
+            ),
+            (
+                400,
+                r#"{"Message":"Your order request is pending broker confirmation. Confirmation is still possible."}"#,
+            ),
+            // The Learn article's timeout, which may come with an OrderId.
+            (
+                200,
+                r#"{"ErrorInfo":{"ErrorCode":"TradeNotCompleted","Message":"Trade not completed"},"OrderId":"5001"}"#,
+            ),
+            // Any error next to an OrderId names an order that exists.
+            (
+                200,
+                r#"{"ErrorInfo":{"ErrorCode":"OtherError","Message":"Something else"},"OrderId":"5002"}"#,
+            ),
+        ] {
+            let error = placement_answering(status, "application/json", body)
+                .await
+                .expect_err("not a settled placement");
+            assert!(
+                placement_error_is_state_unknown(&error),
+                "HTTP {status} {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_verdicts_on_a_placement_stay_definite() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"ErrorInfo":{"ErrorCode":"WouldExceedMargin","Message":"Trade would exceed margin limits"}}"#,
+            ),
+            (
+                200,
+                r#"{"ErrorInfo":{"ErrorCode":"PriceNotInTickSizeIncrements","Message":"Order price is not in tick size increments"}}"#,
+            ),
+            (401, ""),
+        ] {
+            let error = placement_answering(status, "application/json", body)
+                .await
+                .expect_err("a rejection is not a placement");
+            assert!(
+                !placement_error_is_state_unknown(&error),
+                "HTTP {status} {body}"
+            );
+        }
+        let placed = placement_answering(
+            200,
+            "application/json",
+            r#"{"OrderId":"5003","Orders":[{"OrderId":"5003"}]}"#,
+        )
+        .await
+        .expect("an OrderId is a placement");
+        assert_eq!(broker_order_id(&placed).as_deref(), Some("5003"));
+    }
+
+    /// The protective-stop paths return a timed-out position read or precheck
+    /// through the same error as their placement and cancellation. Only the
+    /// mutation can leave the broker state unknown; the read changed nothing,
+    /// so the next sweep may try again.
+    #[tokio::test]
+    async fn a_timeout_before_the_order_mutation_is_not_an_unknown_outcome() {
+        let read = post_order_request(&local_endpoint("").await)
+            .await
+            .expect_err("an unanswered read times out");
+        assert!(!protective_stop_lifecycle_error_is_state_unknown(&read));
+
+        let cancellation = OrderMutationError::classify(read)
+            .context("cancelling protective stop 5101 on AMD:xnas");
+        assert!(protective_stop_lifecycle_error_is_state_unknown(
+            &cancellation
+        ));
     }
 
     #[tokio::test]

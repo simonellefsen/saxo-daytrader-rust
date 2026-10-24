@@ -215,6 +215,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(sends, 10, "the guard must still see every known send");
+        // 11 counts the local test endpoint send in `saxo_order.rs`'s tests.
+        assert_eq!(sends, 11, "the guard must still see every known send");
     }
 }
