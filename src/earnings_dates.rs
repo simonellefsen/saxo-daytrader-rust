@@ -7,10 +7,11 @@
 //! `EARNINGS` function returns every past quarter of one stock with its report
 //! date and whether the report came before or after the session.
 //!
-//! A free Alpha Vantage key allows 25 calls a day, so the store fills over
-//! several days within `daily_call_budget`: held stocks first, then anything
-//! the book has traded, then the rest of the US universe. Afterwards each
-//! stock is read again every `refresh_days`, which picks up each new quarter.
+//! A free Alpha Vantage key allows 25 calls a day, shared with the congress
+//! trade store (`alpha_vantage`), so the store fills over several days within
+//! `daily_call_budget`: held stocks first, then anything the book has traded,
+//! then the rest of the US universe. Afterwards each stock is read again every
+//! `refresh_days`, which picks up each new quarter.
 //!
 //! Read-only reference data. Nothing here is read by a gate, a prompt, sizing
 //! or the broker path; `earnings_evaluation` measures from it. Alpha Vantage
@@ -26,23 +27,20 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    config::{yaml_bool, yaml_i64, yaml_string},
+    alpha_vantage::{self, AlphaVantage, REQUEST_SPACING_MS},
+    config::{yaml_bool, yaml_i64},
     db::sql_escape,
     state::{AppState, json_text},
 };
 
-const DEFAULT_BASE_URL: &str = "https://www.alphavantage.co";
 const DEFAULT_DAILY_CALL_BUDGET: i64 = 20;
 const DEFAULT_MAX_CALLS_PER_CYCLE: i64 = 8;
 const DEFAULT_REFRESH_DAYS: i64 = 30;
-/// Alpha Vantage refuses a free key's second call inside a second.
-const REQUEST_SPACING_MS: u64 = 1_300;
 
 #[derive(Clone, Debug)]
 struct EarningsDatesConfig {
     enabled: bool,
-    api_key: Option<String>,
-    base_url: String,
+    provider: AlphaVantage,
     daily_call_budget: usize,
     max_calls_per_cycle: usize,
     refresh_days: i64,
@@ -113,12 +111,7 @@ fn earnings_dates_config(state: &AppState) -> EarningsDatesConfig {
     let key = |suffix: &'static str| ["strategy", "earnings_dates", suffix];
     EarningsDatesConfig {
         enabled: yaml_bool(&state.config, &key("enabled")).unwrap_or(false),
-        api_key: yaml_string(&state.config, &["alpha_vantage", "api_key"])
-            .or_else(|| std::env::var("ALPHAVANTAGE_API_KEY").ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        base_url: yaml_string(&state.config, &["alpha_vantage", "base_url"])
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+        provider: alpha_vantage::alpha_vantage(state),
         daily_call_budget: yaml_i64(&state.config, &key("daily_call_budget"))
             .unwrap_or(DEFAULT_DAILY_CALL_BUDGET)
             .clamp(0, 500) as usize,
@@ -195,15 +188,8 @@ pub(crate) fn parse_earnings_body(body: &str) -> FetchOutcome {
     let Ok(payload) = serde_json::from_str::<JsonValue>(body) else {
         return FetchOutcome::Refused("parse_error");
     };
-    if payload.get("Error Message").is_some() {
-        return FetchOutcome::Refused("invalid_symbol");
-    }
-    if let Some(note) = payload
-        .get("Information")
-        .or_else(|| payload.get("Note"))
-        .and_then(JsonValue::as_str)
-    {
-        return FetchOutcome::Refused(classify_provider_note(note));
+    if let Some(category) = alpha_vantage::refusal(&payload) {
+        return FetchOutcome::Refused(category);
     }
     let quarters = payload
         .get("quarterlyEarnings")
@@ -228,21 +214,6 @@ pub(crate) fn parse_earnings_body(body: &str) -> FetchOutcome {
         FetchOutcome::Refused("no_data")
     } else {
         FetchOutcome::Quarters(quarters)
-    }
-}
-
-/// Alpha Vantage words its refusals in prose. A daily cap stops the store
-/// until tomorrow; a burst limit only until the next call.
-fn classify_provider_note(note: &str) -> &'static str {
-    let note = note.to_lowercase();
-    if note.contains("per day") || note.contains("daily") {
-        "quota_exhausted"
-    } else if note.contains("per second") || note.contains("spreading out") {
-        "rate_limited"
-    } else if note.contains("premium") {
-        "premium_required"
-    } else {
-        "provider_notice"
     }
 }
 
@@ -293,7 +264,7 @@ pub async fn run_earnings_dates_cycle(state: &AppState) -> Result<JsonValue> {
     if !config.enabled {
         return Ok(json!({"status": "disabled"}));
     }
-    let Some(api_key) = config.api_key.clone() else {
+    let Some(api_key) = config.provider.api_key.clone() else {
         return Ok(json!({
             "status": "disabled",
             "reason": "missing_api_key",
@@ -303,19 +274,26 @@ pub async fn run_earnings_dates_cycle(state: &AppState) -> Result<JsonValue> {
     let now = Utc::now();
     let today = now.date_naive();
     let calls_today = calls_made_on(state, today).await?;
-    if quota_exhausted_on(state, today).await? {
+    let provider_calls_today = alpha_vantage::calls_made_on(state, today).await;
+    if alpha_vantage::quota_exhausted_on(state, today).await {
         return Ok(json!({
             "status": "idle",
             "reason": "quota_exhausted_today",
             "calls_today": calls_today,
         }));
     }
-    let remaining = config.daily_call_budget.saturating_sub(calls_today);
+    let remaining = config.daily_call_budget.saturating_sub(calls_today).min(
+        config
+            .provider
+            .daily_call_budget
+            .saturating_sub(provider_calls_today),
+    );
     if remaining == 0 {
         return Ok(json!({
             "status": "idle",
             "reason": "daily_budget_spent",
             "calls_today": calls_today,
+            "provider_calls_today": provider_calls_today,
             "daily_call_budget": config.daily_call_budget,
         }));
     }
@@ -341,9 +319,7 @@ pub async fn run_earnings_dates_cycle(state: &AppState) -> Result<JsonValue> {
     if due.is_empty() {
         return Ok(json!({"status": "idle", "reason": "nothing_due", "calls_today": calls_today}));
     }
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(20))
-        .build()?;
+    let client = alpha_vantage::client()?;
     let mut results = Vec::new();
     for (index, candidate) in due.iter().enumerate() {
         if index > 0 {
@@ -382,27 +358,10 @@ async fn fetch_quarters(
     api_key: &str,
     ticker: &str,
 ) -> FetchOutcome {
-    let url = format!("{}/query", config.base_url.trim_end_matches('/'));
-    let response = client
-        .get(&url)
-        .query(&[
-            ("function", "EARNINGS"),
-            ("symbol", ticker),
-            ("apikey", api_key),
-        ])
-        .send()
-        .await
-        .map_err(crate::debug_redaction::request_error_without_url);
-    let response = match response {
-        Ok(response) => response,
-        Err(err) if err.is_timeout() => return FetchOutcome::Refused("timeout"),
-        Err(_) => return FetchOutcome::Refused("request_failed"),
-    };
-    let status = response.status();
-    if !status.is_success() {
-        return FetchOutcome::Refused(http_category(status.as_u16()));
+    match alpha_vantage::get(client, &config.provider, api_key, "EARNINGS", ticker).await {
+        Ok(body) => parse_earnings_body(&body),
+        Err(category) => FetchOutcome::Refused(category),
     }
-    parse_earnings_body(&response.text().await.unwrap_or_default())
 }
 
 pub(crate) fn http_category(status: u16) -> &'static str {
@@ -534,16 +493,6 @@ async fn calls_made_on(state: &AppState, day: NaiveDate) -> Result<usize> {
         .and_then(JsonValue::as_i64)
         .unwrap_or(0)
         .max(0) as usize)
-}
-
-async fn quota_exhausted_on(state: &AppState, day: NaiveDate) -> Result<bool> {
-    let rows = state
-        .select_json(&format!(
-            "SELECT symbol FROM earnings_date_fetches
-             WHERE last_attempt_date = '{day}' AND last_status = 'quota_exhausted' LIMIT 1"
-        ))
-        .await?;
-    Ok(!rows.is_empty())
 }
 
 /// How far the store has got, for the evaluation's coverage line.
@@ -730,10 +679,20 @@ mod tests {
             1
         );
         assert_eq!(calls_made_on(&state, now.date_naive()).await.unwrap(), 0);
-        assert!(
-            !quota_exhausted_on(&state, tomorrow.date_naive())
-                .await
-                .unwrap()
+        assert_eq!(
+            alpha_vantage::calls_made_on(&state, tomorrow.date_naive()).await,
+            1
         );
+        assert!(!alpha_vantage::quota_exhausted_on(&state, tomorrow.date_naive()).await);
+
+        record_outcome(
+            &state,
+            &mdb,
+            &FetchOutcome::Refused("quota_exhausted"),
+            tomorrow,
+        )
+        .await
+        .unwrap();
+        assert!(alpha_vantage::quota_exhausted_on(&state, tomorrow.date_naive()).await);
     }
 }

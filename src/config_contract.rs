@@ -290,6 +290,10 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "quiver", "max_symbols"],
         "Quiver universe cap.",
     ),
+    advisory_subtree(
+        &["strategy", "congress_trades"],
+        "Alpha Vantage congress-trade fetch budget and refresh; the stored trades feed the advisory Quiver signal.",
+    ),
     // ---- strategy.swing ----
     unused(
         &["strategy", "swing", "min_holdings"],
@@ -1254,6 +1258,7 @@ mod tests {
             &["strategy", "earnings_dates"][..],
             &["strategy", "company_profiles"],
             &["strategy", "trading_schedules"],
+            &["strategy", "congress_trades"],
             &["alpha_vantage"],
             &["financial_modeling_prep"],
         ] {
@@ -1265,14 +1270,22 @@ mod tests {
                 "{path:?} must match between local and Kubernetes configs"
             );
         }
-        let budget =
-            crate::config::yaml_at(&local, &["strategy", "earnings_dates", "daily_call_budget"])
+        let budget = |path: &[&str]| {
+            crate::config::yaml_at(&local, path)
                 .and_then(YamlValue::as_i64)
-                .expect("earnings budget is configured");
+                .unwrap_or_else(|| panic!("{path:?} is configured"))
+        };
         assert!(
-            budget < 25,
-            "a free Alpha Vantage key allows 25 calls a day"
+            budget(&["alpha_vantage", "daily_call_budget"]) < 25,
+            "a free Alpha Vantage key allows 25 calls a day across every store"
         );
+        for store in ["earnings_dates", "congress_trades"] {
+            assert!(
+                budget(&["strategy", store, "daily_call_budget"])
+                    <= budget(&["alpha_vantage", "daily_call_budget"]),
+                "{store} cannot spend more than the shared allowance"
+            );
+        }
     }
 
     #[test]

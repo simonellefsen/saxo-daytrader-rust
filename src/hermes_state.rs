@@ -1708,7 +1708,7 @@ pub(crate) fn hermes_capabilities_payload(goal_contract: JsonValue) -> HermesCap
             "Strategy experiments must change exactly one variable while one_variable_only is true.",
             "Markov method signals are advisory analytics and do not place or approve orders.",
             "Gate replay is a read-only historical target-gate comparison; a target-gate clear is not a full approval.",
-            "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
+            "Congress-trading signals (quiver_signals, scored from Alpha Vantage disclosures) are advisory analytics and do not place or approve orders.",
             "Public editorial-research items are attributable secondary context only and do not place, approve, block, size, or otherwise modify orders.",
             "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
             "Daily end-of-day reports are exposed as sanitized strategy journal rows.",

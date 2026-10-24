@@ -196,7 +196,9 @@ mod tests {
             ("saxo_portfolio.rs", include_str!("saxo_portfolio.rs")),
             ("state.rs", include_str!("state.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
+            ("alpha_vantage.rs", include_str!("alpha_vantage.rs")),
             ("earnings_dates.rs", include_str!("earnings_dates.rs")),
+            ("congress_trades.rs", include_str!("congress_trades.rs")),
             ("company_profiles.rs", include_str!("company_profiles.rs")),
         ];
         let mut sends = 0;

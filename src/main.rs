@@ -1,9 +1,11 @@
+mod alpha_vantage;
 mod api;
 mod auth;
 mod build_info;
 mod company_profiles;
 mod config;
 mod config_contract;
+mod congress_trades;
 mod daily_indicators;
 mod dashboard_state;
 mod db;

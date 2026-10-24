@@ -35,3 +35,4 @@ debug
 .env
 .env.*
 !.env.example
+.claude/

@@ -11,6 +11,27 @@ evaluation endpoint and two dashboard panels.
 | `company_profiles` | Financial Modeling Prep `/stable/profile` | `/api/portfolio/concentration` | Performance → Sector Concentration |
 | `instrument_trading_schedules` | Saxo `/ref/v1/instruments/tradingschedule/{Uic}/{AssetType}` | `/api/market/trading-schedule` | Market → Saxo Trading Schedule |
 
+## Congress trades
+
+Since 2026-10-24 the congress signal (the `quiver_*` tables and the Congress
+tab, named for QuiverQuant, its former paid source) scores disclosures that
+Alpha Vantage's free `CONGRESS_TRADES` returns. Unlike the stores above, this
+one feeds an advisory input: decision reports, Hermes and the Jev reviews
+read the signal, never a gate or the broker path.
+
+- `congress_trades` keeps one stock's House and Senate disclosures from the
+  last 400 days, replaced as a whole on each answer. Option trades are left
+  out: a disclosure says buy or sell but not call or put.
+- `congress_trade_fetches` keeps one row per ticker. A stock is read again
+  every 7 days; disclosures arrive weeks after the trade.
+- The daily signal cycle (US open + 45 minutes) reads only the store and
+  calls no provider. A stock not fetched yet is recorded as
+  `not_yet_fetched`, so the signal's freshness reads `partial` until the
+  store has covered the universe.
+- The score is unchanged from Quiver's: buys count up and sells down,
+  weighted by recency and by the amount band's lower bound. Alpha Vantage
+  reports no excess return or price change, so those fields are empty.
+
 ## Keys
 
 `ALPHAVANTAGE_API_KEY` and `FINANCIALMODELINGPREP_API_KEY` come from `.env`
@@ -24,14 +45,20 @@ string, so every request maps its send error through
 `FINNHUBIO_API_KEY` is in `.env` but nothing reads it yet. It is the candidate
 source for upcoming US report dates if an earnings blackout is built.
 
+`QUIVERQUANT_API_KEY` is no longer read; the deployed config dropped its
+`quiver:` provider block on 2026-10-24.
+
 ## Budgets
 
 | Store | Daily calls | Per cycle | Refresh |
 | --- | --- | --- | --- |
-| Report dates | 20 (free key: 25) | 8, 1.3 s apart | every 30 days per stock |
+| Congress trades | 20 | 8, 1.3 s apart | every 7 days per stock |
+| Report dates | 20 | 8, 1.3 s apart | every 30 days per stock |
 | Profiles | 100 (free plan: 250) | 25, 0.3 s apart | every 30 days per stock |
 | Trading schedules | about 35 Saxo reads | once a day from 06:30 Copenhagen | daily, weekends included |
 
+Both Alpha Vantage stores share `alpha_vantage.daily_call_budget` (24; a free
+key allows 25), and the congress store runs first in each scheduler cycle.
 A stock is asked at most once a day, so a stock's row dated today is one of
 today's calls. Alpha Vantage refuses with HTTP 200 and a prose note: "per day"
 stops the store until the next UTC day, "1 request per second" is retried once.

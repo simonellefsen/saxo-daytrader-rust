@@ -671,7 +671,7 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=market", label: "Market Status", active: active_view == "market" }
             TabLink { href: "/?view=watchlists", label: "Watchlists", active: active_view == "watchlists" }
             TabLink { href: "/?view=markov", label: "Markov", active: active_view == "markov" }
-            TabLink { href: "/?view=quiver", label: "Quiver", active: active_view == "quiver" }
+            TabLink { href: "/?view=quiver", label: "Congress", active: active_view == "quiver" }
             TabLink { href: "/?view=decisions", label: "Decision Reports", active: active_view == "decisions" }
             TabLink { href: "/?view=prompts", label: "AI Prompts", active: active_view == "prompts" }
             TabLink { href: "/?view=hermes", label: "Hermes", active: active_view == "hermes" }
@@ -963,7 +963,7 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
-                        h3 { "Shadow Quiver Context" }
+                        h3 { "Shadow Congress Context" }
                         p { class: "muted", "Decision-time Quiver snapshots saved with shadow candidates. This is advisory-signal coverage only: it never refreshes Quiver and is not a Trading Manager gate, forecast, or execution signal." }
                     }
                 }
@@ -4509,8 +4509,8 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         section { class: "section stack loose",
             div { class: "section-title-row",
                 div {
-                    h2 { "Quiver Signals" }
-                    p { class: "muted", "Daily QuiverQuant alternative-data signals for US portfolio and watchlist assets. Signals are advisory and do not place orders." }
+                    h2 { "Congress Signals" }
+                    p { class: "muted", "Daily congress-trading signals for US portfolio and watchlist assets, scored from House and Senate disclosures that Alpha Vantage publishes (QuiverQuant until 2026-10-24). Signals are advisory and do not place orders." }
                 }
                 div { class: "pill-row right",
                     span { class: "pill", "Signals: {ok_count}" }
@@ -4519,7 +4519,7 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             if !run.available {
                 div { class: "event",
-                    strong { "No Quiver run exists yet." }
+                    strong { "No congress signal run exists yet." }
                     span { class: "muted", "The scheduler will create the first run at the configured US market-open follow-up once QUIVERQUANT_API_KEY is available." }
                 }
             } else {
@@ -4591,8 +4591,8 @@ fn QuiverConflictPanel(conflicts: QuiverConflictPayload, prefs: LocalizationPref
             section { class: "section stack",
                 div { class: "section-title-row compact",
                     div {
-                        h3 { "Held-Position Quiver Conflicts" }
-                        p { class: "muted", "Quiver conflict evidence is unavailable. No exit, gate, or broker action is implied." }
+                        h3 { "Held-Position Congress Conflicts" }
+                        p { class: "muted", "Congress conflict evidence is unavailable. No exit, gate, or broker action is implied." }
                     }
                     span { class: "status bad-text", "unavailable" }
                 }
@@ -4604,8 +4604,8 @@ fn QuiverConflictPanel(conflicts: QuiverConflictPayload, prefs: LocalizationPref
             section { class: "section stack",
                 div { class: "section-title-row compact",
                     div {
-                        h3 { "Held-Position Quiver Conflicts" }
-                        p { class: "muted", "No strong bearish Quiver signal currently conflicts with a held position." }
+                        h3 { "Held-Position Congress Conflicts" }
+                        p { class: "muted", "No strong bearish congress signal currently conflicts with a held position." }
                     }
                     span { class: "status", "clear" }
                 }
@@ -4616,7 +4616,7 @@ fn QuiverConflictPanel(conflicts: QuiverConflictPayload, prefs: LocalizationPref
         section { class: "section stack",
             div { class: "section-title-row compact",
                 div {
-                    h3 { "Held-Position Quiver Conflicts" }
+                    h3 { "Held-Position Congress Conflicts" }
                     p { class: "muted", "Strong bearish Congress-trading signals against current holdings. Review flags only; they do not create an exit, alter a gate, or override technical and Markov evidence." }
                 }
                 span { class: "status bad-text", "{rows.len()} review flags" }
@@ -11025,13 +11025,15 @@ fn scheduled_run_detail(state: ScheduledRunState) -> String {
             due_time.format("%H:%M")
         ),
         ScheduledRunState::MarketOpenNoSession { expected_run_date } => format!(
-            "No US session is scheduled for {expected_run_date}; Quiver waits for the Saxo exchange calendar."
+            "No US session is scheduled for {expected_run_date}; the congress signal waits for the Saxo exchange calendar."
         ),
         ScheduledRunState::MarketOpenBeforeDue { expected_run_date } => {
-            format!("Quiver is waiting for the US market-open +45m target on {expected_run_date}.")
+            format!(
+                "The congress signal is waiting for the US market-open +45m target on {expected_run_date}."
+            )
         }
         ScheduledRunState::MarketOpenDue { expected_run_date } => {
-            format!("The US market-open +45m Quiver run is due for {expected_run_date}.")
+            format!("The US market-open +45m congress signal run is due for {expected_run_date}.")
         }
         ScheduledRunState::Unknown => "No usable schedule configuration is available.".to_string(),
     }

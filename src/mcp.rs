@@ -441,7 +441,7 @@ fn mcp_tools() -> Vec<JsonValue> {
         ),
         tool_schema(
             "get_quiver_signals",
-            "Return recent advisory QuiverQuant alternative-data signals for US portfolio and watchlist assets.",
+            "Return recent advisory congress-trading signals (scored from Alpha Vantage's House and Senate disclosures) for US portfolio and watchlist assets.",
             json!({
                 "type": "object",
                 "properties": {

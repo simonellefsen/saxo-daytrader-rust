@@ -275,6 +275,17 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     .await;
     record_step_duration(&mut step_durations, "markov_method", step_started);
     let step_started = Instant::now();
+    // Congress trades (Alpha Vantage) feed the congress signal below. It runs
+    // before the report-date store so it has first call on the Alpha Vantage
+    // allowance they share.
+    let congress_trades = bounded_enrichment_step(
+        "congress_trades",
+        enrichment_step_timeout("CONGRESS_TRADES", 60),
+        crate::congress_trades::run_congress_trades_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "congress_trades", step_started);
+    let step_started = Instant::now();
     let quiver_signals = bounded_enrichment_step(
         "quiver_signals",
         enrichment_step_timeout("QUIVER", 45),
@@ -520,6 +531,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "daily_indicators": daily_indicators,
         "shadow_hermes_repair": shadow_hermes_repair,
         "performance_benchmarks": performance_benchmarks,
+        "congress_trades": congress_trades,
         "earnings_dates": earnings_dates,
         "company_profiles": company_profiles,
         "trading_schedules": trading_schedules,

@@ -344,8 +344,8 @@ strategy:
   # read by a Decision Report, the Trading Manager, sizing, or the broker path.
   #
   # Past US quarterly report dates from Alpha Vantage, for the earnings
-  # evaluation. A free key allows 25 calls a day; the budget leaves headroom
-  # for manual reads.
+  # evaluation. A free key allows 25 calls a day, shared with congress_trades,
+  # which runs first.
   earnings_dates:
     enabled: true
     daily_call_budget: 20
@@ -481,6 +481,8 @@ strategy:
       "HON:xnys": "HON:xnas"
       "LIN:xnys": "LIN:xnas"
       "SHELL:xlon": "SHEL:xlon"
+  # Named for QuiverQuant, its source until 2026-10-24; it now scores the
+  # congress_trades store below.
   quiver:
     enabled: true
     timezone: Europe/Copenhagen
@@ -492,6 +494,15 @@ strategy:
     run_weekdays_only: true
     lookback_days: 120
     max_symbols: 60
+  # The congress trades that signal scores, from Alpha Vantage. One call per
+  # stock from the allowance shared with earnings_dates (alpha_vantage
+  # daily_call_budget); disclosures lag the trade by weeks, so a weekly
+  # refresh per stock is enough.
+  congress_trades:
+    enabled: true
+    daily_call_budget: 20
+    max_calls_per_cycle: 8
+    refresh_days: 7
   swing:
     min_holdings: 10
     max_holdings: 25
@@ -831,14 +842,12 @@ openfigi:
 alpha_vantage:
   api_key: ENV:ALPHAVANTAGE_API_KEY
   base_url: https://www.alphavantage.co
+  # Calls a day across every store; the free key allows 25.
+  daily_call_budget: 24
 
 financial_modeling_prep:
   api_key: ENV:FINANCIALMODELINGPREP_API_KEY
   base_url: https://financialmodelingprep.com
-
-quiver:
-  api_key: ENV:QUIVERQUANT_API_KEY
-  base_url: https://api.quiverquant.com
 
 hermes:
   experiments:

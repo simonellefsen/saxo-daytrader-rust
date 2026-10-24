@@ -1,12 +1,18 @@
-use std::{collections::HashSet, time::Duration as StdDuration};
+//! The daily congress-trading signal for US portfolio and watchlist assets.
+//!
+//! Named for QuiverQuant, its source until 2026-10-24. The trades now come
+//! from Alpha Vantage through `congress_trades`, which fetches within the
+//! shared daily allowance; this cycle only scores what that store holds. The
+//! `quiver_*` names and tables stay because decision reports, Hermes and the
+//! Jev reviews read them.
 
-use anyhow::{Context, Result, anyhow, bail};
+use std::collections::HashSet;
+
+use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate, Utc};
 use chrono_tz::Tz;
-use reqwest::header;
 use serde_json::{Value as JsonValue, json};
-use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::{
     config::{yaml_bool, yaml_i64, yaml_string},
@@ -15,12 +21,11 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_BASE_URL: &str = "https://api.quiverquant.com";
 const DEFAULT_US_OPEN_FOLLOWUP_MINUTES: i64 = 45;
 const DEFAULT_US_EXCHANGE_CODES: &[&str] = &["XNAS", "XNYS"];
-const REQUEST_DELAY_MS: u64 = 350;
-const MAX_ATTEMPTS: usize = 3;
 const STRONG_BEARISH_CONFLICT_SIGNAL: f64 = -0.35;
+/// A stock `congress_trades` has not answered for yet.
+const NOT_YET_FETCHED: &str = "not_yet_fetched";
 
 #[derive(Clone, Debug)]
 struct QuiverConfig {
@@ -29,8 +34,6 @@ struct QuiverConfig {
     run_weekdays_only: bool,
     minutes_after_us_open: i64,
     exchange_codes: Vec<String>,
-    base_url: String,
-    api_key: Option<String>,
     max_symbols: usize,
     lookback_days: i64,
 }
@@ -78,13 +81,6 @@ pub async fn run_quiver_signal_cycle(state: &AppState) -> Result<JsonValue> {
     let config = quiver_config(state);
     if !config.enabled {
         return Ok(json!({"status": "disabled"}));
-    }
-    if config.api_key.as_deref().unwrap_or("").is_empty() {
-        return Ok(json!({
-            "status": "disabled",
-            "reason": "missing_api_key",
-            "api_key_env": "QUIVERQUANT_API_KEY"
-        }));
     }
 
     let now = Utc::now();
@@ -138,13 +134,6 @@ pub async fn run_quiver_signals_now(state: &AppState) -> Result<JsonValue> {
     if !config.enabled {
         return Ok(json!({"status": "disabled"}));
     }
-    if config.api_key.as_deref().unwrap_or("").is_empty() {
-        return Ok(json!({
-            "status": "disabled",
-            "reason": "missing_api_key",
-            "api_key_env": "QUIVERQUANT_API_KEY"
-        }));
-    }
     let run_date = Utc::now().with_timezone(&config.timezone).date_naive();
     run_quiver_signals_for_date(state, &config, run_date).await
 }
@@ -160,58 +149,26 @@ async fn run_quiver_signals_for_date(
     let mut rows = Vec::new();
     let mut success_count = 0usize;
     let mut error_count = 0usize;
-    let mut terminal_status: Option<String> = None;
+    let mut pending_count = 0usize;
 
     for asset in &assets {
-        let row = match analyze_asset(config, run_date, asset).await {
-            Ok(analysis) => {
-                if analysis.status == "ok" {
-                    success_count += 1;
-                } else {
-                    error_count += 1;
-                }
-                signal_row_json(&run_id, &created_at, run_date, config, asset, &analysis)
-            }
-            Err(err) => {
-                error_count += 1;
-                let terminal_error = classify_terminal_quiver_error(&err);
-                let status = terminal_error.unwrap_or("error");
-                warn!(symbol = %asset.symbol, "Quiver asset analysis failed: {err:#}");
-                let analysis = QuiverAnalysis {
-                    status: status.to_string(),
-                    signal: 0.0,
-                    direction: "neutral".to_string(),
-                    confidence: 0.0,
-                    event_count: 0,
-                    congress_purchase_count: 0,
-                    congress_sale_count: 0,
-                    net_congress_amount: 0.0,
-                    latest_event_date: None,
-                    top_events: Vec::new(),
-                    source_status: json!({"congress_trading": status}),
-                    error_text: Some(format!("{err:#}")),
-                };
-                let row = signal_row_json(&run_id, &created_at, run_date, config, asset, &analysis);
-                if terminal_error.is_some() {
-                    terminal_status = Some(status.to_string());
-                }
-                row
-            }
-        };
+        let analysis = analyze_asset(state, config, run_date, asset).await?;
+        match analysis.status.as_str() {
+            "ok" => success_count += 1,
+            NOT_YET_FETCHED => pending_count += 1,
+            _ => error_count += 1,
+        }
+        let row = signal_row_json(&run_id, &created_at, run_date, config, asset, &analysis);
         insert_quiver_signal(state, &row).await?;
         rows.push(row);
-        if terminal_status.is_some() {
-            break;
-        }
-        sleep(StdDuration::from_millis(REQUEST_DELAY_MS)).await;
     }
 
-    let status = if let Some(status) = terminal_status.as_deref() {
-        status
-    } else if success_count > 0 {
+    let status = if success_count > 0 {
         "completed"
     } else if assets.is_empty() {
         "empty"
+    } else if pending_count == assets.len() {
+        "awaiting_congress_trades"
     } else {
         "error"
     };
@@ -240,6 +197,7 @@ async fn run_quiver_signals_for_date(
         "requested_asset_count": assets.len(),
         "success_count": success_count,
         "error_count": error_count,
+        "not_yet_fetched_count": pending_count,
         "config": quiver_config_json(config),
         "signals": ranked_bullish.iter().take(20).map(compact_signal_row).collect::<Vec<_>>(),
         "top_bullish": ranked_bullish.iter().filter(|row| value_f64(row, "signal") > 0.15).take(8).map(compact_signal_row).collect::<Vec<_>>(),
@@ -266,11 +224,15 @@ async fn run_quiver_signals_for_date(
 }
 
 async fn analyze_asset(
+    state: &AppState,
     config: &QuiverConfig,
     run_date: NaiveDate,
     asset: &QuiverAsset,
 ) -> Result<QuiverAnalysis> {
-    let trades = fetch_congress_trades(config, &asset.ticker).await?;
+    let Some(stored) = crate::congress_trades::stored_trades(state, &asset.ticker).await? else {
+        return Ok(not_yet_fetched_analysis());
+    };
+    let trades = stored.iter().map(scored_trade).collect::<Vec<_>>();
     Ok(analyze_congress_trades(
         run_date,
         config.lookback_days,
@@ -278,82 +240,40 @@ async fn analyze_asset(
     ))
 }
 
-async fn fetch_congress_trades(config: &QuiverConfig, ticker: &str) -> Result<Vec<CongressTrade>> {
-    let path = format!("/beta/historical/congresstrading/{}", ticker);
-    let payload = quiver_get_json(config, &path).await?;
-    let rows = payload
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|row| CongressTrade {
-            representative: text_any(&row, &["Representative", "Senator", "Name"]),
-            report_date: parse_date(&text_any(&row, &["ReportDate", "Reportdate", "Filed"])),
-            transaction_date: parse_date(&text_any(&row, &["TransactionDate", "Date", "Traded"])),
-            transaction: text_any(&row, &["Transaction", "TransactionType"]),
-            range: text_any(&row, &["Range", "AmountRange"]),
-            house: text_any(&row, &["House", "Chamber"]),
-            party: text_any(&row, &["Party"]),
-            amount: number_any(&row, &["Amount"])
-                .unwrap_or_else(|| range_amount(&text_any(&row, &["Range"]))),
-            excess_return: number_any(&row, &["ExcessReturn"]),
-            price_change: number_any(&row, &["PriceChange"]),
-            spy_change: number_any(&row, &["SPYChange", "SpyChange"]),
-        })
-        .collect::<Vec<_>>();
-    Ok(rows)
-}
-
-async fn quiver_get_json(config: &QuiverConfig, path: &str) -> Result<JsonValue> {
-    let api_key = config
-        .api_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("QUIVERQUANT_API_KEY is missing"))?;
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(30))
-        .build()?;
-    let url = format!("{}{}", config.base_url.trim_end_matches('/'), path);
-    let mut last_error = String::new();
-    for attempt in 1..=MAX_ATTEMPTS {
-        let response = client
-            .get(&url)
-            .bearer_auth(api_key)
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await?;
-        let status = response.status();
-        let retry_after = response
-            .headers()
-            .get(header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        let body = response.text().await.unwrap_or_default();
-        if status.is_success() {
-            return serde_json::from_str::<JsonValue>(&body)
-                .with_context(|| format!("parsing Quiver response for {path}"));
-        }
-        let snippet = body.chars().take(280).collect::<String>();
-        last_error = format!("Quiver GET failed: HTTP {}: {}", status.as_u16(), snippet);
-        if (status.as_u16() == 429 || status.is_server_error()) && attempt < MAX_ATTEMPTS {
-            let delay_secs = retry_after.unwrap_or_else(|| 2_u64.pow(attempt as u32).min(30));
-            warn!(path, attempt, delay_secs, "Quiver GET retrying after error");
-            sleep(StdDuration::from_secs(delay_secs)).await;
-            continue;
-        }
-        bail!("{last_error}");
+fn not_yet_fetched_analysis() -> QuiverAnalysis {
+    QuiverAnalysis {
+        status: NOT_YET_FETCHED.to_string(),
+        signal: 0.0,
+        direction: "neutral".to_string(),
+        confidence: 0.0,
+        event_count: 0,
+        congress_purchase_count: 0,
+        congress_sale_count: 0,
+        net_congress_amount: 0.0,
+        latest_event_date: None,
+        top_events: Vec::new(),
+        source_status: json!({"congress_trading": {"status": NOT_YET_FETCHED, "source": "alpha_vantage"}}),
+        error_text: None,
     }
-    bail!("{last_error}")
 }
 
-fn classify_terminal_quiver_error(err: &anyhow::Error) -> Option<&'static str> {
-    let message = format!("{err:#}").to_lowercase();
-    if message.contains("http 401") {
-        Some("auth_error")
-    } else if message.contains("http 403") || message.contains("upgrade your subscription plan") {
-        Some("subscription_required")
-    } else {
-        None
+/// An Alpha Vantage disclosure in the shape the score was written for. The
+/// amount is the band's lower bound, as Quiver's range was read; Alpha
+/// Vantage reports no excess return or price change.
+fn scored_trade(trade: &crate::congress_trades::CongressTrade) -> CongressTrade {
+    let band = |value: Option<f64>| value.map(|v| format!("{v:.0}")).unwrap_or_default();
+    CongressTrade {
+        representative: trade.politician.clone(),
+        report_date: trade.filed_date,
+        transaction_date: trade.transaction_date,
+        transaction: trade.transaction_type.clone(),
+        range: format!("{}-{}", band(trade.amount_min), band(trade.amount_max)),
+        house: trade.chamber.clone(),
+        party: trade.party.clone(),
+        amount: trade.amount_min.unwrap_or(0.0),
+        excess_return: None,
+        price_change: None,
+        spy_change: None,
     }
 }
 
@@ -452,7 +372,8 @@ fn analyze_congress_trades(
             "congress_trading": {
                 "status": "ok",
                 "lookback_days": lookback_days,
-                "matched_events": event_count
+                "matched_events": event_count,
+                "source": "alpha_vantage"
             }
         }),
         error_text: None,
@@ -512,7 +433,7 @@ async fn quiver_assets(state: &AppState, max_symbols: usize) -> Result<Vec<Quive
     let assets = markov_assets(state, max_symbols.saturating_mul(2).max(max_symbols)).await?;
     let mut rows = Vec::new();
     for asset in assets {
-        let Some(ticker) = quiver_ticker(&asset.symbol) else {
+        let Some(ticker) = crate::earnings_dates::us_ticker(&asset.symbol) else {
             continue;
         };
         rows.push(QuiverAsset {
@@ -526,19 +447,6 @@ async fn quiver_assets(state: &AppState, max_symbols: usize) -> Result<Vec<Quive
         }
     }
     Ok(rows)
-}
-
-fn quiver_ticker(symbol: &str) -> Option<String> {
-    let mut parts = symbol.splitn(2, ':');
-    let base = parts.next()?.trim().to_uppercase();
-    let exchange = parts.next().unwrap_or("").trim().to_lowercase();
-    if base.is_empty() {
-        return None;
-    }
-    match exchange.as_str() {
-        "xnas" | "xnys" | "arcx" | "bats" => Some(base.replace('.', "-")),
-        _ => None,
-    }
 }
 
 async fn insert_quiver_signal(state: &AppState, row: &JsonValue) -> Result<()> {
@@ -897,10 +805,6 @@ fn quiver_config(state: &AppState) -> QuiverConfig {
         .or_else(|| yaml_string(&state.config, &["localization", "time_zone"]))
         .and_then(|value| value.parse::<Tz>().ok())
         .unwrap_or(chrono_tz::Europe::Copenhagen);
-    let api_key = yaml_string(&state.config, &["quiver", "api_key"])
-        .or_else(|| std::env::var("QUIVERQUANT_API_KEY").ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
     QuiverConfig {
         enabled: yaml_bool(&state.config, &["strategy", "quiver", "enabled"]).unwrap_or(true),
         timezone,
@@ -918,9 +822,6 @@ fn quiver_config(state: &AppState) -> QuiverConfig {
         .unwrap_or(DEFAULT_US_OPEN_FOLLOWUP_MINUTES)
         .max(0),
         exchange_codes: quiver_exchange_codes(state),
-        base_url: yaml_string(&state.config, &["quiver", "base_url"])
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-        api_key,
         max_symbols: yaml_i64(&state.config, &["strategy", "quiver", "max_symbols"])
             .unwrap_or(60)
             .max(0) as usize,
@@ -938,11 +839,10 @@ fn quiver_config_json(config: &QuiverConfig) -> JsonValue {
         "minutes_after_open": config.minutes_after_us_open,
         "exchange_codes": config.exchange_codes,
         "run_weekdays_only": config.run_weekdays_only,
-        "base_url": config.base_url,
-        "api_key_configured": config.api_key.as_ref().is_some_and(|value| !value.is_empty()),
         "max_symbols": config.max_symbols,
         "lookback_days": config.lookback_days,
-        "sources": ["congress_trading"]
+        "sources": ["congress_trading"],
+        "provider": "alpha_vantage"
     })
 }
 
@@ -1047,44 +947,6 @@ fn transaction_direction(value: &str) -> f64 {
     }
 }
 
-fn parse_date(value: &str) -> Option<NaiveDate> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
-        .or_else(|_| NaiveDate::parse_from_str(trimmed, "%Y%m%d"))
-        .or_else(|_| chrono::DateTime::parse_from_rfc3339(trimmed).map(|value| value.date_naive()))
-        .ok()
-}
-
-fn number_any(row: &JsonValue, keys: &[&str]) -> Option<f64> {
-    keys.iter().find_map(|key| {
-        row.get(*key).and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_i64().map(|number| number as f64))
-                .or_else(|| value.as_str().and_then(parse_number))
-        })
-    })
-}
-
-fn parse_number(value: &str) -> Option<f64> {
-    let cleaned = value
-        .trim()
-        .trim_end_matches('%')
-        .replace(['$', ',', '+'], "");
-    cleaned.parse::<f64>().ok()
-}
-
-fn range_amount(value: &str) -> f64 {
-    value
-        .split(['-', '–'])
-        .next()
-        .and_then(parse_number)
-        .unwrap_or(0.0)
-}
-
 fn text(row: &JsonValue, key: &str) -> String {
     row.get(key)
         .and_then(JsonValue::as_str)
@@ -1095,18 +957,6 @@ fn text(row: &JsonValue, key: &str) -> String {
 
 fn value_f64(row: &JsonValue, key: &str) -> f64 {
     row.get(key).and_then(JsonValue::as_f64).unwrap_or(0.0)
-}
-
-fn text_any(row: &JsonValue, keys: &[&str]) -> String {
-    keys.iter()
-        .find_map(|key| {
-            row.get(*key)
-                .and_then(JsonValue::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_default()
 }
 
 fn parse_json_field(value: Option<&JsonValue>) -> Option<JsonValue> {
@@ -1127,22 +977,31 @@ fn optional_text_sql(value: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    /// Alpha Vantage's `BUY`/`SELL` score the way Quiver's `Purchase`/`Sale`
+    /// did, on the band's lower bound.
     #[test]
-    fn extracts_us_ticker_from_saxo_symbol() {
-        assert_eq!(quiver_ticker("NVDA:xnas").as_deref(), Some("NVDA"));
-        assert_eq!(quiver_ticker("BRK.B:xnys").as_deref(), Some("BRK-B"));
-        assert_eq!(quiver_ticker("ADS:xetr"), None);
-    }
-
-    #[test]
-    fn classifies_subscription_denial_as_terminal() {
-        let err = anyhow!(
-            "Quiver GET failed: HTTP 403: {{\"detail\":\"Upgrade your subscription plan\"}}"
-        );
-        assert_eq!(
-            classify_terminal_quiver_error(&err),
-            Some("subscription_required")
-        );
+    fn alpha_vantage_disclosures_score_like_quiver_ones() {
+        let disclosure = |kind: &str| crate::congress_trades::CongressTrade {
+            politician: "Example".to_string(),
+            bioguide_id: "X1".to_string(),
+            chamber: "HOUSE".to_string(),
+            party: "R".to_string(),
+            transaction_type: kind.to_string(),
+            transaction_date: NaiveDate::from_ymd_opt(2026, 6, 30),
+            filed_date: NaiveDate::from_ymd_opt(2026, 7, 1),
+            amount_min: Some(1001.0),
+            amount_max: Some(15000.0),
+            owner_code: "SELF".to_string(),
+        };
+        let run_date = NaiveDate::from_ymd_opt(2026, 7, 3).unwrap();
+        let bought = analyze_congress_trades(run_date, 120, &[scored_trade(&disclosure("BUY"))]);
+        let sold = analyze_congress_trades(run_date, 120, &[scored_trade(&disclosure("SELL"))]);
+        let other = analyze_congress_trades(run_date, 120, &[scored_trade(&disclosure("OTHER"))]);
+        assert_eq!(bought.direction, "bullish");
+        assert_eq!(sold.direction, "bearish");
+        assert_eq!(other.event_count, 0);
+        assert_eq!(bought.top_events[0]["amount"], json!(1001.0));
+        assert_eq!(bought.top_events[0]["range"], json!("1001-15000"));
     }
 
     #[test]

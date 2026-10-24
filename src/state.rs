@@ -6937,6 +6937,12 @@ impl AppState {
                 .await
                 .context("creating earnings report date tables")?;
         }
+        for sql in crate::congress_trades::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating congress trade tables")?;
+        }
         for sql in crate::company_profiles::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
