@@ -10,8 +10,21 @@ use std::{collections::HashSet, time::Duration};
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
+use tracing::warn;
 
 use crate::decision_schema;
+
+/// A provider refuses a request it has not started with 429 -- OpenRouter's
+/// admission control could not confirm the account's credits in time, or the
+/// account is over its rate -- and says how long to wait. Nothing was
+/// generated or billed, so the same request is sent again after that wait. A
+/// failed report uses up its pulse for the day, so without this a ten-second
+/// wait cost a whole session's decisions (report 455, 2026-10-29).
+const SUBMIT_MAX_ATTEMPTS: u32 = 3;
+/// The wait when a 429 names none.
+const SUBMIT_DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(10);
+/// A longer wait is not a hiccup: the 429 stands and the report fails.
+const SUBMIT_MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// Provider-neutral request inputs. The provider owns only the transport
 /// shape; report prompting, schema selection, and persistence remain outside
@@ -36,6 +49,8 @@ pub(crate) struct DecisionProvider {
 pub(crate) struct ProviderHttpResponse {
     pub status: StatusCode,
     pub body: String,
+    /// Requests sent to get this response, counting retried 429s.
+    pub attempts: u32,
 }
 
 impl ProviderHttpResponse {
@@ -108,20 +123,52 @@ impl DecisionProvider {
         body
     }
 
+    /// Submits one report, sending it again after a 429 the provider asks to
+    /// wait out briefly. Any other status, a transport error, or a 429 asking
+    /// for more than `SUBMIT_MAX_RETRY_AFTER` is returned at once: those
+    /// requests may have started, and retrying them could bill twice.
     pub async fn submit_chat_completion(
         &self,
         api_key: &str,
         request: &JsonValue,
     ) -> Result<ProviderHttpResponse> {
-        let response = self
-            .http_client()?
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(api_key)
-            .json(request)
-            .send()
-            .await
-            .context("submitting AI decision report")?;
-        Ok(Self::read_response(response, "failed to read AI provider response body").await)
+        let client = self.http_client()?;
+        let mut attempt = 1;
+        loop {
+            let response = client
+                .post(format!("{}/chat/completions", self.base_url))
+                .bearer_auth(api_key)
+                .json(request)
+                .send()
+                .await
+                .context("submitting AI decision report")?;
+            let header_wait = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| crate::jev::retry_after_seconds(Some(value), chrono::Utc::now()))
+                .map(Duration::from_secs);
+            let mut reply =
+                Self::read_response(response, "failed to read AI provider response body").await;
+            reply.attempts = attempt;
+            if reply.status != StatusCode::TOO_MANY_REQUESTS || attempt >= SUBMIT_MAX_ATTEMPTS {
+                return Ok(reply);
+            }
+            let wait = header_wait
+                .or_else(|| body_retry_after(&reply.body))
+                .unwrap_or(SUBMIT_DEFAULT_RETRY_AFTER);
+            if wait > SUBMIT_MAX_RETRY_AFTER {
+                return Ok(reply);
+            }
+            warn!(
+                provider = %self.name,
+                attempt,
+                wait_seconds = wait.as_secs(),
+                "AI provider refused the decision report with HTTP 429; sending it again"
+            );
+            tokio::time::sleep(wait).await;
+            attempt += 1;
+        }
     }
 
     pub async fn poll_deferred_completion(
@@ -155,8 +202,24 @@ impl DecisionProvider {
             .text()
             .await
             .unwrap_or_else(|err| format!("{body_error_context}: {err}"));
-        ProviderHttpResponse { status, body }
+        ProviderHttpResponse {
+            status,
+            body,
+            attempts: 1,
+        }
     }
+}
+
+/// OpenRouter repeats the wait inside the error body
+/// (`error.metadata.headers.Retry-After`), which survives a proxy that drops
+/// the header.
+fn body_retry_after(body: &str) -> Option<Duration> {
+    let payload: JsonValue = serde_json::from_str(body).ok()?;
+    let value = payload.pointer("/error/metadata/headers/Retry-After")?;
+    value
+        .as_u64()
+        .or_else(|| value.as_str()?.trim().parse().ok())
+        .map(Duration::from_secs)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,12 +427,147 @@ fn validate_openrouter_strict_schema_at(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use reqwest::StatusCode;
     use serde_json::json;
 
     use super::{
-        ChatCompletionRequest, DecisionProvider, decision_report_response_format,
+        ChatCompletionRequest, DecisionProvider, body_retry_after, decision_report_response_format,
         validate_openrouter_strict_schema,
     };
+
+    /// The 429 that cost the US open report on 2026-10-29 (report 455).
+    const ADMISSION_CONTROL_429: &str = r#"{"error":{"message":"OpenRouter could not verify available credits for this request in time. Retry shortly.","code":429,"metadata":{"limit_source":"openrouter_admission_control","remedy_hint":"Slow down the request rate for this account, then retry after the reset (see X-RateLimit-Reset).","headers":{"Retry-After":"10"},"provider_name":null}}}"#;
+
+    type Reply = (u16, Option<&'static str>, String);
+
+    /// Serves `replies` on `/chat/completions` in order, then 500, on loopback.
+    async fn scripted_provider(replies: Vec<Reply>) -> (DecisionProvider, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let base_url = format!("http://{}", listener.local_addr().expect("an address"));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let script = Arc::new(Mutex::new(std::collections::VecDeque::from(replies)));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move || {
+                let counter = counter.clone();
+                let script = script.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let (status, retry_after, body) = script
+                        .lock()
+                        .expect("the script")
+                        .pop_front()
+                        .unwrap_or((500, None, "unscripted".to_string()));
+                    let mut headers = axum::http::HeaderMap::new();
+                    if let Some(value) = retry_after {
+                        headers.insert(
+                            axum::http::header::RETRY_AFTER,
+                            axum::http::HeaderValue::from_static(value),
+                        );
+                    }
+                    (
+                        axum::http::StatusCode::from_u16(status).expect("a status"),
+                        headers,
+                        body,
+                    )
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (DecisionProvider::new("openrouter", &base_url, 5), hits)
+    }
+
+    async fn submit(provider: &DecisionProvider) -> super::ProviderHttpResponse {
+        provider
+            .submit_chat_completion("test-key", &json!({"model": "test"}))
+            .await
+            .expect("a response")
+    }
+
+    #[test]
+    fn the_wait_is_read_from_openrouters_error_body() {
+        assert_eq!(
+            body_retry_after(ADMISSION_CONTROL_429),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(body_retry_after(r#"{"error":{"code":429}}"#), None);
+        assert_eq!(body_retry_after("not json"), None);
+    }
+
+    #[tokio::test]
+    async fn a_429_is_sent_again_after_the_wait_it_asks_for() {
+        let (provider, hits) = scripted_provider(vec![
+            (429, Some("0"), ADMISSION_CONTROL_429.to_string()),
+            (200, None, r#"{"id":"gen-1"}"#.to_string()),
+        ])
+        .await;
+        let reply = submit(&provider).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.attempts, 2);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    /// Without the header, the body's wait is used. A zero keeps the test fast.
+    #[tokio::test]
+    async fn a_429_without_the_header_waits_as_its_body_says() {
+        let body = ADMISSION_CONTROL_429.replace(r#""Retry-After":"10""#, r#""Retry-After":"0""#);
+        let (provider, hits) = scripted_provider(vec![
+            (429, None, body),
+            (200, None, r#"{"id":"gen-1"}"#.to_string()),
+        ])
+        .await;
+        assert_eq!(submit(&provider).await.attempts, 2);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn retries_stop_at_three_requests() {
+        let (provider, hits) = scripted_provider(vec![
+            (429, Some("0"), ADMISSION_CONTROL_429.to_string()),
+            (429, Some("0"), ADMISSION_CONTROL_429.to_string()),
+            (429, Some("0"), ADMISSION_CONTROL_429.to_string()),
+            (200, None, r#"{"id":"gen-1"}"#.to_string()),
+        ])
+        .await;
+        let reply = submit(&provider).await;
+        assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(reply.attempts, 3);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+    }
+
+    /// A long wait is an outage, not a hiccup, and any other error may come
+    /// from a request that started and was billed: neither is sent again.
+    #[tokio::test]
+    async fn a_long_wait_or_another_error_is_not_sent_again() {
+        let (provider, hits) =
+            scripted_provider(vec![(429, Some("120"), ADMISSION_CONTROL_429.to_string())]).await;
+        let reply = submit(&provider).await;
+        assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(reply.attempts, 1);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        for status in [500, 502, 402] {
+            let (provider, hits) =
+                scripted_provider(vec![(status, Some("0"), "{}".to_string())]).await;
+            let reply = submit(&provider).await;
+            assert_eq!(reply.status.as_u16(), status);
+            assert_eq!(reply.attempts, 1);
+            assert_eq!(hits.load(Ordering::SeqCst), 1);
+        }
+    }
 
     #[test]
     fn provider_preserves_sync_and_deferred_contracts() {

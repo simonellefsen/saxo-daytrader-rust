@@ -681,9 +681,15 @@ async fn submit_report_with_prompt(
         .submit_chat_completion(&api_key, &outbound_request)
         .await?;
     let status = response.status;
+    let submit_attempts = response.attempts;
     let response_body = response.body;
     if !status.is_success() {
         let response_excerpt = truncate_error_text(&response_body, 2_000);
+        let attempts_note = if submit_attempts > 1 {
+            format!(" after {submit_attempts} attempts")
+        } else {
+            String::new()
+        };
         let report = insert_xai_error_report(
             state,
             &created_at,
@@ -693,13 +699,16 @@ async fn submit_report_with_prompt(
             &outbound_request,
             mode,
             fallback_retry,
-            &format!("{provider} decision submit failed with HTTP {status}: {response_excerpt}"),
+            &format!(
+                "{provider} decision submit failed{attempts_note} with HTTP {status}: {response_excerpt}"
+            ),
         )
         .await?;
         warn!(
             pulse_key = %pulse.key,
             provider = %provider,
             status = %status,
+            submit_attempts,
             "AI decision report submit failed"
         );
         return Ok(report);
@@ -750,7 +759,8 @@ async fn submit_report_with_prompt(
             json!({
                 "response_id": response_id,
                 "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                "mode": "chat_completion"
+                "mode": "chat_completion",
+                "submit_attempts": submit_attempts
             }),
             mode,
         ) {

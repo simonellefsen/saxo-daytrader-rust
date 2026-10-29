@@ -745,7 +745,7 @@ pub(crate) fn request_budget(request: &JsonValue, state_bytes: usize) -> Request
 }
 
 /// The wait a `Retry-After` header asks for, in seconds, from either form.
-fn retry_after_seconds(
+pub(crate) fn retry_after_seconds(
     retry_after: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<u64> {

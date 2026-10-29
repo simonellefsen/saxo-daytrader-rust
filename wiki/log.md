@@ -3544,3 +3544,18 @@ Closes the BUY-side gap the U18 entry left open ("Not changed").
 - **What.** `earnings_blackout.rs`, described in [reference data](../docs/reference-data.md). Finnhub's upcoming US report dates are read once a day, one weekday at a time, because a single window request stops at 1,500 rows and on the first probe dropped 26 October to 4 November, the busiest week. Each queued US BUY is noted with its next report's reaction session; one reacting within 5 weekday sessions is marked `would_block`. `/api/evaluation/earnings` gains a `blackout` section that later shows what those reports did to the BUYs that went ahead.
 - **Safety.** The observation runs after the orders are queued and cannot change, delay or resize one; a failure is reported in the manager JSON, never raised. The Finnhub key is sent as a header. The URL-stripping guard now counts 12 sends.
 - **Also.** An Alpha Vantage daily-quota refusal now pauses both Alpha Vantage stores for six hours instead of until the next UTC date, because Alpha Vantage does not say when its day starts. The first congress cycle hit the quota on its second call, after the day's report-date backfill and manual probes.
+
+## [2026-10-29] Decisions | A brief OpenRouter 429 no longer costs the day's US report
+
+- **What happened.** The 15:45 Copenhagen US open report (#455), one of the two that may queue orders, was refused by OpenRouter with HTTP 429. Admission control "could not verify available credits for this request in time" and asked for a retry after 10 seconds. The submit path had no retry, so the refusal was stored as `xai_error`, and a stored report uses up its pulse key for the day. No US decisions were made that session. The shadow report at 19:15 completed normally.
+- **Fix** in `src/decision_provider.rs`. `submit_chat_completion` sends the same request again after a 429, at most three requests in all.
+  - **The wait** is the one the provider names: the `Retry-After` header first, then OpenRouter's copy in `error.metadata.headers.Retry-After`, otherwise 10 seconds.
+  - **When it does not retry.** A wait over 60 seconds is treated as an outage, not a hiccup: the 429 stands and the report fails as before.
+  - **Only 429s.** A 429 is refused before the model runs, so nothing was generated or billed, and the resend cannot duplicate a charge. Every other status and every transport error still fails at once, because those requests may have started.
+  - **Audit.** A completed report records `submit_attempts` under its provider metadata. A failure after retries says "after N attempts" in its error text.
+- **Not changed.** A report that still fails keeps consuming its pulse key, as the 2026-08-19 shadow decision requires.
+- **Tests.** Five new, hermetic, on a scripted loopback provider. The regression input is report 455's own 429 body. The tests cover:
+  - a 429 retried once;
+  - the wait read from the body when there is no header;
+  - retries stopping at three requests;
+  - a 120-second wait, and 500, 502 and 402 answers, which are not sent again.
